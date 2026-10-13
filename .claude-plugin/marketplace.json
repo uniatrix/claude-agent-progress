@@ -1,0 +1,5 @@
+{
+  "name": "agent-progress",
+  "owner": { "name": "uniatrix" },
+  "plugins": [{ "name": "agent-progress", "source": "./" }]
+}

@@ -1,0 +1,77 @@
+import { expect, mock, test } from 'claude-code/testing'
+
+import type { AgentRow } from '../types'
+import { checklistRatio, estimateRatio, foldStats, progressOf, stepsFromList, textBar } from '../hooks/model'
+
+const BAND = {
+  hasSurvey: false,
+  isWorking: true,
+  maxRows: 10,
+  bodyColumns: 120,
+  scroll: { offset: 0, bodyRows: 10 },
+  view: {},
+}
+
+function agent(over: Partial<AgentRow>): AgentRow {
+  return {
+    id: 'a1',
+    label: 'Pesquisa',
+    type: 'Explore',
+    status: 'running',
+    startedAt: 0,
+    tools: 0,
+    steps: [],
+    isWorkflow: false,
+    ...over,
+  }
+}
+
+test('a checklist is real progress, in-progress steps count half', () => {
+  const steps = stepsFromList(['a', 'b', 'c', 'd'], 2)
+  expect(steps.map(s => s.status)).toEqual(['completed', 'completed', 'in_progress', 'pending'])
+  expect(checklistRatio(steps)).toBe(2.5 / 4)
+  expect(progressOf(agent({ steps }), {}, 0)).toEqual({ ratio: 2.5 / 4, isEstimate: false })
+})
+
+test('the estimate rises with tool calls and never reaches 100%', () => {
+  const few = estimateRatio(agent({ tools: 3 }), undefined, 0)
+  const usual = estimateRatio(agent({ tools: 18 }), undefined, 0)
+  const many = estimateRatio(agent({ tools: 500 }), undefined, 0)
+  expect(few < usual).toBe(true)
+  expect(usual > 0.75 && usual < 0.9).toBe(true)
+  expect(many < 0.96).toBe(true)
+  expect(progressOf(agent({ tools: 3 }), {}, 0)?.isEstimate).toBe(true)
+})
+
+test('history replaces the default and the main loop gets no guess', () => {
+  const stats = { Explore: foldStats(undefined, 6, 60_000) }
+  const withHistory = estimateRatio(agent({ tools: 6 }), stats.Explore, 0)
+  expect(withHistory > 0.8).toBe(true)
+  expect(progressOf(agent({ id: 'main', type: 'main', tools: 9 }), stats, 0)).toBe(null)
+  expect(progressOf(agent({ status: 'completed' }), stats, 0)).toEqual({ ratio: 1, isEstimate: false })
+})
+
+test('text bars mark estimates with a different glyph', () => {
+  expect(textBar(0.5, 10, false)).toBe('█████░░░░░')
+  expect(textBar(0.5, 10, true)).toBe('▒▒▒▒▒░░░░░')
+})
+
+test('the progress tool fills the band on terminal and desktop', async ($, on) => {
+  mock.clock(on)
+  const answered = await $.tool.call({
+    tool: 'mcp__agent-progress__progress',
+    steps: ['Ler o código', 'Escrever o mod', 'Testar'],
+    done: 1,
+    current: 'escrevendo',
+  })
+  // A plugin tool's result must be text: an object fails the call in a live session.
+  expect(typeof answered.result).toBe('string')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-progress', surface, component: 'AbovePrompt', props: BAND })
+    expect(await ui.find({ text: /Agentes/ })).toBeDefined()
+    expect(await ui.find({ text: /Conversa principal/ })).toBeDefined()
+    expect(await ui.find({ text: /50%/ })).toBeDefined()
+    if (surface === 'desktop') expect(await ui.find({ type: 'Svg' })).toBeDefined()
+    await ui.unmount()
+  }
+})
