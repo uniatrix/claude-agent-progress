@@ -436,8 +436,8 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || (await read($, isBandHidden))) {
-      noteRender(`band:${e.surface}`, e.props.hasSurvey ? 'passed: survey' : 'passed: hidden')
+    if (e.props.hasSurvey) {
+      noteRender(`band:${e.surface}`, 'passed: survey')
 
       return next(e)
     }
@@ -454,6 +454,19 @@ export const register: Register = on => {
       noteRender(`band:${e.surface}`, 'passed: nothing live')
 
       return next(e)
+    }
+    if (await read($, isBandHidden)) {
+      // Minimized: one line, and the way back on it.
+      noteRender(`band:${e.surface}`, 'drew minimized')
+      const { Box, Text, Button } = $.ui.resolve(e)
+
+      return (
+        <Box flexDirection="row" gap={1}>
+          <Text bold>Agentes</Text>
+          <Text dimColor>{summary(all)}</Text>
+          <Button key="show" plain label="mostrar" onPress={() => update($, isBandHidden, () => false)} />
+        </Box>
+      )
     }
     noteRender(`band:${e.surface}`, `drew ${shown.length} rows (${e.props.bodyColumns} cols, ${e.props.maxRows} rows)`)
 
@@ -473,7 +486,7 @@ export const register: Register = on => {
             <Text bold>Agentes</Text>
             <Text dimColor>{summary(all)}</Text>
             <Button key="open" plain label="detalhes" onPress={() => $.ui.open({ id: PANE, title: 'Agentes' })} />
-            <Button key="hide" plain label="ocultar" onPress={() => update($, isBandHidden, () => true)} />
+            <Button key="hide" plain label="minimizar" onPress={() => update($, isBandHidden, () => true)} />
           </Box>
           {visible.map(({ row, depth }) => {
             const p = progressOf(row, known, t)
@@ -503,7 +516,7 @@ export const register: Register = on => {
           <Text bold>Agentes</Text>
           <Text dimColor>{summary(all)}</Text>
           <Button key="open" plain label="detalhes" onPress={() => $.ui.open({ id: PANE, title: 'Agentes' })} />
-          <Button key="hide" plain label="ocultar" onPress={() => update($, isBandHidden, () => true)} />
+          <Button key="hide" plain label="minimizar" onPress={() => update($, isBandHidden, () => true)} />
         </Box>
         {visible.map(({ row, depth }) => {
           const p = progressOf(row, known, t)

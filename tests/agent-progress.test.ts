@@ -75,3 +75,17 @@ test('the progress tool fills the band on terminal and desktop', async ($, on) =
     await ui.unmount()
   }
 })
+
+test('a minimized band keeps one line with the way back', async ($, on) => {
+  mock.clock(on)
+  await $.tool.call({ tool: 'mcp__agent-progress__progress', steps: ['a', 'b'], done: 0 })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-progress', surface, component: 'AbovePrompt', props: BAND })
+    await ui.press({ key: 'hide' })
+    expect(await ui.find({ key: 'show' })).toBeDefined()
+    expect(await ui.find({ text: /Conversa principal/ })).toBeUndefined()
+    await ui.press({ key: 'show' })
+    expect(await ui.find({ text: /Conversa principal/ })).toBeDefined()
+    await ui.unmount()
+  }
+})

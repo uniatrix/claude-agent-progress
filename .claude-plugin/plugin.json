@@ -1,6 +1,6 @@
 {
   "name": "agent-progress",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Barras de progresso dos agentes e subagentes da sessão, acima do prompt (real por checklist, estimado por histórico).",
   "author": { "name": "uniatrix" },
   "types": "./types/index.d.ts"

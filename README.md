@@ -27,7 +27,7 @@ Responda `y` para adicionar o marketplace e escolha o escopo de usuário. Depois
 
 ## Comandos
 
-- `/agentes` abre o painel com a checklist completa de cada agente e a base de cada número. Também reexibe a faixa se você a ocultou.
+- `/agentes` abre o painel com a checklist completa de cada agente e a base de cada número. O botão "minimizar" deixa a faixa numa linha só, com um botão "mostrar" pra voltar.
 
 ## Opcional: checklist na conversa principal
 
