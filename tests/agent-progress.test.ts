@@ -1,7 +1,15 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import type { AgentRow } from '../types'
-import { checklistRatio, estimateRatio, foldStats, progressOf, stepsFromList, textBar } from '../hooks/model'
+import {
+  checklistRatio,
+  estimateRatio,
+  foldStats,
+  parseOutputProgress,
+  progressOf,
+  stepsFromList,
+  textBar,
+} from '../hooks/model'
 
 const BAND = {
   hasSurvey: false,
@@ -88,4 +96,36 @@ test('a minimized band keeps one line with the way back', async ($, on) => {
     expect(await ui.find({ text: /Conversa principal/ })).toBeDefined()
     await ui.unmount()
   }
+})
+
+test('progress printed by a program is read from the end of its output', () => {
+  expect(parseOutputProgress('Rendered 13912/16638, time remaining: 6m 57s\nRendered 13914/16638')).toBe(13914 / 16638)
+  expect(parseOutputProgress('step 1/2 done\n45%')).toBe(0.45)
+  expect(parseOutputProgress('page 1/2')).toBeUndefined()
+  expect(parseOutputProgress('nothing here')).toBeUndefined()
+})
+
+test('a background shell shows in the band with the progress its log reports', async ($, on) => {
+  mock.clock(on)
+  on('classic.Stop', () => ({}))
+  on('tool.call', { tool: 'Bash' }, (_, e) =>
+    e.run_in_background
+      ? {
+          result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' },
+          text: 'Command running in background with ID: b1. Output is being written to: C:\tmp\b1.output. You will be notified when it completes.',
+        }
+      : { result: { stdout: 'Rendered 50/100', stderr: '', interrupted: false }, text: 'Rendered 50/100' },
+  )
+  await $.tool.call({ tool: 'Bash', command: 'render.sh', description: 'Renderizar o vídeo', run_in_background: true })
+  await $.tool.call({ tool: 'Bash', command: 'tail -1 render.log' })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-progress', surface, component: 'AbovePrompt', props: BAND })
+    expect(await ui.find({ text: /Renderizar o vídeo/ })).toBeDefined()
+    expect(await ui.find({ text: /50%/ })).toBeDefined()
+    await ui.unmount()
+  }
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [] })
+  const ui = await $.ui.mount({ plugin: 'agent-progress', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  expect(await ui.find({ text: /100%/ })).toBeDefined()
+  await ui.unmount()
 })

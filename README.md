@@ -25,6 +25,10 @@ Responda `y` para adicionar o marketplace e escolha o escopo de usuário. Depois
 - **Barra listrada, com `~` (estimativa):** o agente não fez checklist. A barra sobe conforme o número de ferramentas usadas e o tempo decorrido, comparados com a média dos agentes do mesmo tipo que já terminaram. Nunca passa de 95%. A média fica salva entre sessões, então a estimativa melhora com o uso.
 - **Sem barra:** a conversa principal sem checklist mostra só o tempo e a ação atual.
 
+## Tarefas em background
+
+Comandos rodando em background (uma renderização, um build, um servidor) também aparecem na faixa, abaixo do agente que os iniciou. Se o comando imprime o próprio progresso (`Rendered 13914/16638`, `84%`), a barra usa esse número, lido da saída do comando ou da última vez que o agente conferiu o log. Sem isso, a linha mostra só o tempo e a última linha impressa. A tarefa sai da lista quando termina.
+
 ## Comandos
 
 - `/agentes` abre o painel com a checklist completa de cada agente e a base de cada número. O botão "minimizar" deixa a faixa numa linha só, com um botão "mostrar" pra voltar.

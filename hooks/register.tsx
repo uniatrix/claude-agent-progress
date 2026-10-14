@@ -9,7 +9,9 @@ import {
   duration,
   foldStats,
   isLive,
+  lastLine,
   mapListStatus,
+  parseOutputProgress,
   percent,
   progressOf,
   stepsFromList,
@@ -200,6 +202,79 @@ function noteRender(site: string, outcome: string): void {
   renders[site] = { count: seen.count + 1, last: outcome }
 }
 
+/** What a backgrounded command's result says about where its output goes. */
+const OUTPUT_PATH = /Output is being written to: (.+?\.output)/
+/** `$.fs.read` refuses past 4 MiB; a log that long is left unread. */
+const READ_LIMIT = 4 * 1024 * 1024
+const TAIL = 4000
+
+function taskKey(id: string): string {
+  return `task:${id}`
+}
+
+type TaskSummary = { id: string; type: string; status: string; description: string }
+
+/**
+ * Background work as a Stop hook lists it: each one listed is running, and a
+ * tracked one no longer listed has finished.
+ */
+async function reconcileTasks($: Engine, listed: readonly TaskSummary[] | undefined, t: number): Promise<void> {
+  if (listed === undefined) return
+  const tasks = listed.filter(task => task.type !== 'subagent')
+  await update($, rows, all => {
+    const out = { ...all }
+    const seen = new Set<string>()
+    for (const task of tasks) {
+      const id = taskKey(task.id)
+      seen.add(id)
+      const prev = out[id]
+      out[id] = {
+        ...(prev ?? fresh(id, t)),
+        label: prev?.label ?? clip(task.description || task.type, 60),
+        type: prev?.type ?? task.type,
+        kind: 'task',
+        parentId: prev?.parentId ?? MAIN,
+        status: 'running',
+        endedAt: undefined,
+      }
+    }
+    for (const row of Object.values(all)) {
+      if (row.kind === 'task' && isLive(row.status) && !seen.has(row.id)) {
+        out[row.id] = { ...row, status: 'completed', endedAt: t }
+      }
+    }
+
+    return out
+  })
+}
+
+/** Reads what running background shells printed, for progress they report. */
+async function readTaskOutputs($: Engine): Promise<void> {
+  const all = await read($, rows)
+  for (const row of Object.values(all)) {
+    const path = row.outputPath
+    if (row.kind !== 'task' || !isLive(row.status) || path === undefined) continue
+    try {
+      const { size } = await $.fs.stat(path)
+      if (size === 0 || size === row.outputSize || size > READ_LIMIT) continue
+      const text = await $.fs.read(path)
+      const tail = typeof text === 'string' ? text.slice(-TAIL) : ''
+      const ratio = parseOutputProgress(tail)
+      const line = lastLine(tail)
+      await patch($, row.id, prev =>
+        prev && {
+          ...prev,
+          outputSize: size,
+          outputRatio: ratio ?? prev.outputRatio,
+          current: line ? clip(line, 80) : prev.current,
+        },
+      )
+    } catch {
+      // The file is gone or unreadable: the row keeps what it had.
+    }
+  }
+}
+
 async function tick($: Engine): Promise<void> {
   ticks += 1
   const t = await $.clock.now()
@@ -209,6 +284,7 @@ async function tick($: Engine): Promise<void> {
   )
   if (isActive) await update($, now, () => t)
   if (isActive || ticks % 10 === 0) await syncList($, t)
+  if (isActive && ticks % 2 === 0) await readTaskOutputs($)
 }
 
 export const register: Register = on => {
@@ -364,7 +440,47 @@ export const register: Register = on => {
       }
     })
     const ran = await next(e)
-    if (ran.deny !== undefined || ran.isError) return ran
+    if (ran.deny !== undefined) return ran
+
+    if (e.tool === 'Bash' || e.tool === 'PowerShell') {
+      const out = ran.result as { backgroundTaskId?: unknown } | undefined
+      const bg = typeof out?.backgroundTaskId === 'string' ? out.backgroundTaskId : undefined
+      const text = ran.text ?? ''
+      if (bg !== undefined) {
+        const id = taskKey(bg)
+        const path = OUTPUT_PATH.exec(text)?.[1]
+        await patch($, id, prev => ({
+          ...(prev ?? fresh(id, t)),
+          label: clip(e.description || e.command, 60),
+          type: 'shell',
+          kind: 'task',
+          parentId: key,
+          status: 'running',
+          outputPath: path ?? prev?.outputPath,
+        }))
+      } else {
+        // A check on background work's own log ("Rendered 13914/16638"): when
+        // this loop runs exactly one background task, the progress is its.
+        const tail = text.slice(-TAIL)
+        const ratio = parseOutputProgress(tail)
+        if (ratio !== undefined) {
+          const line = lastLine(tail)
+          await update($, rows, all => {
+            const mine = Object.values(all).filter(
+              r => r.kind === 'task' && isLive(r.status) && (r.parentId ?? MAIN) === key,
+            )
+            const only = mine.length === 1 ? mine[0] : undefined
+            if (only === undefined) return all
+
+            return {
+              ...all,
+              [only.id]: { ...only, outputRatio: ratio, current: line ? clip(line, 80) : only.current },
+            }
+          })
+        }
+      }
+    }
+    if (ran.isError) return ran
 
     if (e.tool === 'TaskCreate') {
       const made = ran.result as { task?: { id?: string } } | undefined
@@ -408,6 +524,18 @@ export const register: Register = on => {
     return ran
   })
 
+  on('classic.Stop', async ($, e, next) => {
+    await reconcileTasks($, e.background_tasks, await $.clock.now())
+
+    return next(e)
+  })
+
+  on('classic.SubagentStop', async ($, e, next) => {
+    await reconcileTasks($, e.background_tasks, await $.clock.now())
+
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     const key = e.agentId ?? MAIN
     const t = await $.clock.now()
@@ -444,10 +572,11 @@ export const register: Register = on => {
     const all = await read($, rows)
     const t = Math.max(await read($, now), ...Object.values(all).map(r => r.startedAt))
     const known = await read($, stats)
-    const hasAgents = Object.values(all).some(r => r.id !== MAIN && isLive(r.status))
+    const hasOthers = Object.values(all).some(r => r.id !== MAIN && isLive(r.status))
     const shown = treeOrder(all).filter(({ row }) =>
       row.id === MAIN
-        ? row.status === 'running' && (row.steps.length > 0 || hasAgents)
+        ? // A short answer would only flash the band: wait for a few tool calls.
+          row.status === 'running' && (row.steps.length > 0 || hasOthers || row.tools >= 3)
         : isLive(row.status) || (row.endedAt !== undefined && t - row.endedAt < LINGER_MS),
     )
     if (shown.length === 0) {
@@ -574,7 +703,11 @@ export const register: Register = on => {
           const bar = p === null ? '·'.repeat(barWidth) : textBar(p.ratio, barWidth, p.isEstimate)
           const seen = known[row.type]
           const basis =
-            p === null
+            row.kind === 'task'
+              ? p === null
+                ? 'em background, sem progresso impresso'
+                : 'progresso impresso pelo comando'
+              : p === null
               ? 'sem checklist'
               : p.isEstimate
                 ? seen && seen.runs > 0

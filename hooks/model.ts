@@ -48,12 +48,47 @@ export function progressOf(
   now: number,
 ): Progress {
   if (row.status === 'completed') return { ratio: 1, isEstimate: false }
+  if (row.kind === 'task') {
+    // Background work has no checklist and no comparable history: only what it printed.
+    return row.outputRatio === undefined ? null : { ratio: row.outputRatio, isEstimate: false }
+  }
   const real = checklistRatio(row.steps)
   if (real !== null) return { ratio: real, isEstimate: false }
   // The main conversation varies too much per prompt for a guess to mean anything.
   if (row.id === MAIN) return null
 
   return { ratio: estimateRatio(row, stats[row.type], now), isEstimate: true }
+}
+
+const PERCENT = /(\d{1,3}(?:[.,]\d+)?)\s?%/g
+const FRACTION = /\b(\d+)\s?\/\s?(\d+)\b/g
+
+/**
+ * The last progress a program printed: `Rendered 13914/16638` or `84%`, the
+ * one nearest the end winning. Fractions need a whole of 10 or more, so a
+ * date or a `1/2` is not read as progress.
+ */
+export function parseOutputProgress(text: string): number | undefined {
+  let best: { at: number; ratio: number } | undefined
+  for (const m of text.matchAll(PERCENT)) {
+    const n = Number((m[1] ?? '').replace(',', '.'))
+    if (n >= 0 && n <= 100) best = { at: m.index ?? 0, ratio: n / 100 }
+  }
+  for (const m of text.matchAll(FRACTION)) {
+    const done = Number(m[1])
+    const whole = Number(m[2])
+    const at = m.index ?? 0
+    if (whole >= 10 && done <= whole && (!best || at > best.at)) best = { at, ratio: done / whole }
+  }
+
+  return best?.ratio
+}
+
+/** The last non-empty line of a program's output, for the row's detail. */
+export function lastLine(text: string): string | undefined {
+  const lines = text.split(/[\r\n]+/).map(l => l.trim()).filter(Boolean)
+
+  return lines[lines.length - 1]
 }
 
 /** Folds one finished run into its type's running averages. */

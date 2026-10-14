@@ -18,6 +18,13 @@ export type AgentRow = {
   current?: string
   steps: Step[]
   isWorkflow: boolean
+  /** `task` for background work (a shell, monitor or workflow), `agent` otherwise. */
+  kind?: 'agent' | 'task'
+  /** A background shell's output file, read for progress it prints. */
+  outputPath?: string
+  outputSize?: number
+  /** Progress the work printed itself (`13914/16638`, `84%`), 0 to 1. */
+  outputRatio?: number
 }
 
 /** Running averages of finished agents of one type, for the estimated bar. */
