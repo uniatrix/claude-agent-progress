@@ -27,7 +27,7 @@ Responda `y` para adicionar o marketplace e escolha o escopo de usuário. Depois
 
 ## Tarefas em background
 
-Comandos rodando em background (uma renderização, um build, um servidor) também aparecem na faixa, abaixo do agente que os iniciou. Se o comando imprime o próprio progresso (`Rendered 13914/16638`, `84%`), a barra usa esse número, lido da saída do comando ou da última vez que o agente conferiu o log. Sem isso, a linha mostra só o tempo e a última linha impressa. A tarefa sai da lista quando termina.
+Comandos rodando em background (uma renderização, um build, um servidor) também aparecem na faixa, abaixo do agente que os iniciou. Se o comando imprime o próprio progresso (`Rendered 13914/16638`, `84%`), a barra usa esse número. O mod acha sozinho onde ler: a saída do comando, os logs para onde ele manda a saída (`> work/render.log`, `| tee build.log`) e qualquer log que o agente tenha conferido. Lê o arquivo mais recente a cada 2 segundos, então numa sequência (renderiza, depois masteriza) a barra acompanha cada etapa. Sem isso, a linha mostra só o tempo e a última linha impressa. A tarefa sai da lista quando termina.
 
 ## Comandos
 

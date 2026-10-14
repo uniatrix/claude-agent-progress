@@ -84,9 +84,75 @@ export function parseOutputProgress(text: string): number | undefined {
   return best?.ratio
 }
 
+const LEADING_CD = /^\s*cd\s+(?:"([^"]+)"|'([^']+)'|([^\s&;|]+))\s*(?:&&|;)/
+const REDIRECT = /(?:^|[^\d&<>])(?:\d|&)?>>?\s*(?:"([^"]+)"|'([^']+)'|([^\s"'&|;<>]+))/g
+const TEE = /\|\s*(?:tee|Tee-Object)\s+(?:-a\s+|-FilePath\s+|-Append\s+)*(?:"([^"]+)"|'([^']+)'|([^\s"'&|;<>]+))/gi
+const READS = /\b(?:tail|cat|head|less|type|Get-Content|gc)\b/
+const LOG_NAME = /(?:"([^"]+\.(?:log|txt|out))"|'([^']+\.(?:log|txt|out))'|([^\s"'&|;<>]+\.(?:log|txt|out)))(?![\w.])/gi
+const NOT_A_LOG = /^(?:\/dev\/null|nul)$|\.(?:mp4|mov|mkv|webm|png|jpe?g|gif|webp|wav|mp3|ogg|zip|7z|tar|gz|exe|dll|bin)$/i
+
+/** `/c/Users/x` (Git Bash) and `C:\Users\x` both as `C:/Users/x`. */
+export function toHostPath(path: string): string {
+  const slashed = path.replace(/\\/g, '/')
+  const drive = /^\/([a-zA-Z])\//.exec(slashed)
+
+  return drive ? `${(drive[1] ?? '').toUpperCase()}:/${slashed.slice(3)}` : slashed
+}
+
+function isAbsolute(path: string): boolean {
+  return /^(?:[a-zA-Z]:\/|\/)/.test(path)
+}
+
+function resolveIn(base: string, path: string): string {
+  const p = toHostPath(path)
+  if (isAbsolute(p)) return p
+
+  return `${toHostPath(base).replace(/\/+$/, '')}/${p.replace(/^\.\//, '')}`
+}
+
+/** The directory a command runs in: its leading `cd`, else the session's. */
+export function commandDir(command: string, cwd: string): string {
+  const m = LEADING_CD.exec(command)
+  const dir = m?.[1] ?? m?.[2] ?? m?.[3]
+
+  return dir === undefined ? toHostPath(cwd) : resolveIn(cwd, dir)
+}
+
+function collect(pattern: RegExp, command: string, dir: string, out: string[]): void {
+  for (const m of command.matchAll(pattern)) {
+    const target = m[1] ?? m[2] ?? m[3]
+    // A file looks like one (`run.log`, `work/x`): a bare `b` is `a > b` in some code.
+    if (target === undefined || NOT_A_LOG.test(target) || !/[./\\]/.test(target)) continue
+    const path = resolveIn(dir, target)
+    if (!out.includes(path)) out.push(path)
+  }
+}
+
+/** The files a command sends its output to: `> work/render.log`, `| tee run.log`. */
+export function logTargets(command: string, cwd: string): string[] {
+  const dir = commandDir(command, cwd)
+  const out: string[] = []
+  collect(REDIRECT, command, dir, out)
+  collect(TEE, command, dir, out)
+
+  return out
+}
+
+/** The logs a command reads (`tail -c 400 work/render.log`), when it reads any. */
+export function polledLogs(command: string, cwd: string): string[] {
+  if (!READS.test(command)) return []
+  const dir = commandDir(command, cwd)
+  const out: string[] = []
+  collect(LOG_NAME, command, dir, out)
+
+  return out
+}
+
 /** The last non-empty line of a program's output, for the row's detail. */
 export function lastLine(text: string): string | undefined {
-  const lines = text.split(/[\r\n]+/).map(l => l.trim()).filter(Boolean)
+  // Terminal colors (`\x1b[34m`) are noise outside a terminal.
+  const plain = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+  const lines = plain.split(/[\r\n]+/).map(l => l.trim()).filter(Boolean)
 
   return lines[lines.length - 1]
 }

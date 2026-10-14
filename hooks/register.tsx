@@ -10,9 +10,11 @@ import {
   foldStats,
   isLive,
   lastLine,
+  logTargets,
   mapListStatus,
   parseOutputProgress,
   percent,
+  polledLogs,
   progressOf,
   stepsFromList,
   textBar,
@@ -193,6 +195,14 @@ async function syncList($: Engine, t: number): Promise<void> {
 }
 
 let ticks = 0
+let isTicking = false
+
+/** The one-second refresh; started at session start, or by the first tool call when the mod came later. */
+function startTicking($: Engine): void {
+  if (isTicking) return
+  isTicking = true
+  $.clock.every(1000, () => void tick($).catch(() => undefined))
+}
 
 /** Debug only: what each site last drew, read by the `snapshot` tool. */
 const renders: Record<string, { count: number; last: string }> = {}
@@ -248,24 +258,45 @@ async function reconcileTasks($: Engine, listed: readonly TaskSummary[] | undefi
   })
 }
 
-/** Reads what running background shells printed, for progress they report. */
+/** The file a task is writing now: of its output and logs, the last one touched. */
+async function liveFile($: Engine, row: AgentRow): Promise<{ path: string; size: number } | undefined> {
+  const paths = [row.outputPath, ...(row.logPaths ?? [])].filter((p): p is string => p !== undefined)
+  let best: { path: string; size: number; mtimeMs: number } | undefined
+  for (const path of paths) {
+    try {
+      const { size, mtimeMs, kind } = await $.fs.stat(path)
+      if (kind === 'file' && size > 0 && (!best || mtimeMs > best.mtimeMs)) best = { path, size, mtimeMs }
+    } catch {
+      // Not written yet (a later stage's log), or gone.
+    }
+  }
+
+  return best
+}
+
+/**
+ * Reads what running background shells print, for progress they report: the
+ * file being written now, so a chain (render, then master) follows each stage.
+ */
 async function readTaskOutputs($: Engine): Promise<void> {
   const all = await read($, rows)
   for (const row of Object.values(all)) {
-    const path = row.outputPath
-    if (row.kind !== 'task' || !isLive(row.status) || path === undefined) continue
+    if (row.kind !== 'task' || !isLive(row.status)) continue
+    const file = await liveFile($, row)
+    if (file === undefined || file.size > READ_LIMIT) continue
+    if (file.path === row.watched && file.size === row.outputSize) continue
     try {
-      const { size } = await $.fs.stat(path)
-      if (size === 0 || size === row.outputSize || size > READ_LIMIT) continue
-      const text = await $.fs.read(path)
+      const text = await $.fs.read(file.path)
       const tail = typeof text === 'string' ? text.slice(-TAIL) : ''
       const ratio = parseOutputProgress(tail)
       const line = lastLine(tail)
       await patch($, row.id, prev =>
         prev && {
           ...prev,
-          outputSize: size,
-          outputRatio: ratio ?? prev.outputRatio,
+          watched: file.path,
+          outputSize: file.size,
+          // A new stage's log without a number has no progress of its own yet.
+          outputRatio: ratio ?? (file.path === prev.watched ? prev.outputRatio : undefined),
           current: line ? clip(line, 80) : prev.current,
         },
       )
@@ -283,8 +314,9 @@ async function tick($: Engine): Promise<void> {
     r => isLive(r.status) || (r.endedAt !== undefined && t - r.endedAt < LINGER_MS + 2000),
   )
   if (isActive) await update($, now, () => t)
-  if (isActive || ticks % 10 === 0) await syncList($, t)
-  if (isActive && ticks % 2 === 0) await readTaskOutputs($)
+  // Each step on its own: one that fails (no agent list, say) leaves the others running.
+  if (isActive || ticks % 10 === 0) await syncList($, t).catch(() => undefined)
+  if (isActive && ticks % 2 === 0) await readTaskOutputs($).catch(() => undefined)
 }
 
 export const register: Register = on => {
@@ -320,7 +352,7 @@ export const register: Register = on => {
       name: 'agentes',
       description: 'Abre o painel de progresso dos agentes desta sessão',
     })
-    $.clock.every(1000, () => void tick($))
+    startTicking($)
 
     return next(e)
   })
@@ -373,6 +405,7 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
+    startTicking($)
     const key = e.agentId ?? MAIN
     const tool = String(e.tool)
     const t = await $.clock.now()
@@ -446,6 +479,8 @@ export const register: Register = on => {
       const out = ran.result as { backgroundTaskId?: unknown } | undefined
       const bg = typeof out?.backgroundTaskId === 'string' ? out.backgroundTaskId : undefined
       const text = ran.text ?? ''
+      // Only resolves relative log paths: without it they are left relative.
+      const cwd = await $.session.cwd().catch(() => '')
       if (bg !== undefined) {
         const id = taskKey(bg)
         const path = OUTPUT_PATH.exec(text)?.[1]
@@ -457,13 +492,17 @@ export const register: Register = on => {
           parentId: key,
           status: 'running',
           outputPath: path ?? prev?.outputPath,
+          // Where the command sends its own output (`> work/render.log`): read from now on.
+          logPaths: logTargets(e.command, cwd),
         }))
       } else {
-        // A check on background work's own log ("Rendered 13914/16638"): when
-        // this loop runs exactly one background task, the progress is its.
+        // A check on background work's own log (`tail work/render.log`, printing
+        // "Rendered 13914/16638"): when this loop runs exactly one background
+        // task, the log and the progress are its, and the log is read from now on.
         const tail = text.slice(-TAIL)
         const ratio = parseOutputProgress(tail)
-        if (ratio !== undefined) {
+        const logs = polledLogs(e.command, cwd)
+        if (ratio !== undefined || logs.length > 0) {
           const line = lastLine(tail)
           await update($, rows, all => {
             const mine = Object.values(all).filter(
@@ -471,10 +510,16 @@ export const register: Register = on => {
             )
             const only = mine.length === 1 ? mine[0] : undefined
             if (only === undefined) return all
+            const known = only.logPaths ?? []
 
             return {
               ...all,
-              [only.id]: { ...only, outputRatio: ratio, current: line ? clip(line, 80) : only.current },
+              [only.id]: {
+                ...only,
+                logPaths: [...known, ...logs.filter(l => !known.includes(l))],
+                outputRatio: ratio ?? only.outputRatio,
+                current: ratio !== undefined && line ? clip(line, 80) : only.current,
+              },
             }
           })
         }

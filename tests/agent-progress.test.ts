@@ -5,7 +5,10 @@ import {
   checklistRatio,
   estimateRatio,
   foldStats,
+  lastLine,
+  logTargets,
   parseOutputProgress,
+  polledLogs,
   progressOf,
   stepsFromList,
   textBar,
@@ -103,6 +106,7 @@ test('progress printed by a program is read from the end of its output', () => {
   expect(parseOutputProgress('step 1/2 done\n45%')).toBe(0.45)
   expect(parseOutputProgress('page 1/2')).toBeUndefined()
   expect(parseOutputProgress('nothing here')).toBeUndefined()
+  expect(lastLine('Encoded 16638/16638\n\u001b[34m○ out/ep1_raw.mp4\u001b[39m 1.2 GB\n')).toBe('○ out/ep1_raw.mp4 1.2 GB')
 })
 
 test('a background shell shows in the band with the progress its log reports', async ($, on) => {
@@ -127,5 +131,42 @@ test('a background shell shows in the band with the progress its log reports', a
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [] })
   const ui = await $.ui.mount({ plugin: 'agent-progress', surface: 'terminal', component: 'AbovePrompt', props: BAND })
   expect(await ui.find({ text: /100%/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const RENDER =
+  'cd /c/Users/x/Videos/proj && rm -rf work/b && npx remotion render src/index.ts Reveal out/raw.mp4 > work/render_v3.log 2>&1 && python tools/master.py out/raw.mp4 out/ep1.mp4 > work/master_v3.log 2>&1 && ffmpeg -i out/ep1.mp4 -f mp4 NUL; cat work/master_v3.log'
+
+test('a command tells where its logs go, and a check tells which log it reads', () => {
+  expect(logTargets(RENDER, 'C:/elsewhere')).toEqual([
+    'C:/Users/x/Videos/proj/work/render_v3.log',
+    'C:/Users/x/Videos/proj/work/master_v3.log',
+  ])
+  expect(logTargets('python - <<EOF\nif a > b: pass\nEOF', 'C:/p')).toEqual([])
+  expect(logTargets('npm run build | tee build.log', 'C:\\p')).toEqual(['C:/p/build.log'])
+  expect(
+    polledLogs("cd /c/Users/x/Videos/proj && tail -c 400 work/render_v3.log | tr '\r' '\n' | tail -3", 'C:/p'),
+  ).toEqual(['C:/Users/x/Videos/proj/work/render_v3.log'])
+  expect(polledLogs('ls -la work', 'C:/p')).toEqual([])
+})
+
+test('the band follows the log a background command writes, without the agent checking', async ($, on) => {
+  const clock = mock.clock(on)
+  on('session.cwd', () => ({ value: 'C:/p' }))
+  on('tool.call', { tool: 'Bash' }, () => ({
+    result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'r1' },
+    text: 'Command running in background with ID: r1. Output is being written to: C:\tmp\r1.output.',
+  }))
+  on('fs.stat', (_, e) =>
+    e.path.endsWith('render_v3.log')
+      ? { value: { kind: 'file', size: 900, mtimeMs: 2, isLink: false } }
+      : { value: { kind: 'file', size: 0, mtimeMs: 1, isLink: false } },
+  )
+  on('fs.read', () => ({ value: 'Rendered 100/400\rRendered 300/400, time remaining: 1m' }))
+  await $.tool.call({ tool: 'Bash', command: RENDER, description: 'Render', run_in_background: true })
+  await clock.advance(5000)
+  const ui = await $.ui.mount({ plugin: 'agent-progress', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  expect(await ui.find({ text: /75%/ })).toBeDefined()
+  expect(await ui.find({ text: /time remaining/ })).toBeDefined()
   await ui.unmount()
 })

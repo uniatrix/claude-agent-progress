@@ -22,6 +22,10 @@ export type AgentRow = {
   kind?: 'agent' | 'task'
   /** A background shell's output file, read for progress it prints. */
   outputPath?: string
+  /** Logs the command writes to (`> work/render.log`), or that the agent read to check on it. */
+  logPaths?: string[]
+  /** The file last read for progress, and its size then. */
+  watched?: string
   outputSize?: number
   /** Progress the work printed itself (`13914/16638`, `84%`), 0 to 1. */
   outputRatio?: number
