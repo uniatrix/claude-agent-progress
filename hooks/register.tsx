@@ -736,21 +736,22 @@ export const register: Register = on => {
               <Box width={8}>
                 <Text dimColor>{i.kind}</Text>
               </Box>
-              <Box width={150}>
-                {i.ratio !== null && (
-                  <Svg
-                    source={svgBar({ ratio: i.ratio, isEstimate: i.isEstimate }, i.status)}
-                    alt={pct(i)}
-                    width={110}
-                    height={8}
-                  />
-                )}
-                {i.ratio !== null && <Text> {pct(i)}</Text>}
-              </Box>
+              {i.ratio !== null && (
+                <Svg
+                  source={svgBar({ ratio: i.ratio, isEstimate: i.isEstimate }, i.status)}
+                  alt={pct(i)}
+                  width={110}
+                  height={8}
+                />
+              )}
+              {i.ratio !== null && <Text>{pct(i)}</Text>}
               <Text dimColor>{i.elapsed}</Text>
-              <Text dimColor wrap="truncate-end">
-                {i.step ?? i.action ?? ''}
-              </Text>
+              {/* The step takes what is left of the line, up to the edge. */}
+              <Box flexGrow={1} flexShrink={1}>
+                <Text dimColor wrap="truncate-end">
+                  {i.step ?? i.action ?? ''}
+                </Text>
+              </Box>
             </Box>
           ))}
         {isOpen && more > 0 && <Text dimColor>+{more} (/agentes)</Text>}
