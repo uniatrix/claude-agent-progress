@@ -43,6 +43,10 @@ Responda `y` para adicionar o marketplace e escolha o escopo de usuário. Depois
 
 Comandos rodando em background (uma renderização, um build, um servidor) também aparecem na faixa, abaixo do agente que os iniciou. Se o comando imprime o próprio progresso (`Rendered 13914/16638`, `84%`), a barra usa esse número. O mod acha sozinho onde ler: a saída do comando, os logs para onde ele manda a saída (`> work/render.log`, `| tee build.log`) e qualquer log que o agente tenha conferido. Lê o arquivo mais recente a cada 2 segundos, então numa sequência (renderiza, depois masteriza) a barra acompanha cada etapa. Sem isso, a linha mostra só o tempo e a última linha impressa. A tarefa sai da lista quando termina.
 
+## Cores
+
+Enquanto roda, a cor diz quem está trabalhando: **laranja** é a conversa principal, **azul** é um subagente e **roxo** é um comando em background. O status muda a cor: **amarelo** esperando, **verde** concluído, **vermelho** falhou.
+
 ## O que cada linha mostra
 
 - **Nome curto** e o **tipo** em uma palavra (busca, plano, agente, comando), mais o tempo rodando.

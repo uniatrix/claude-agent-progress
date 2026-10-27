@@ -123,11 +123,29 @@ const ICON: Record<RowStatus, string> = {
   killed: '✗',
 }
 
+type Role = Item['role']
+
+/** Who is working, told by color while it runs: the chat, a subagent, a command. */
+const ROLE_COLORS: Record<Role, string> = { main: '#D97757', agent: '#4C8DF6', task: '#A371F7' }
+const ROLE_THEME: Record<Role, 'claude' | 'suggestion' | 'merged'> = {
+  main: 'claude',
+  agent: 'suggestion',
+  task: 'merged',
+}
+
+/** The role's color while it runs; waiting, done and failed are said by their own. */
+function colorOf(i: Item): string {
+  return i.status === 'running' ? ROLE_COLORS[i.role] : COLORS[i.status]
+}
+
+function themeOf(i: Item): 'claude' | 'suggestion' | 'merged' | 'warning' | 'success' | 'error' {
+  return i.status === 'running' ? ROLE_THEME[i.role] : THEME[i.status]
+}
+
 /** The remote surfaces' bar: solid for a checklist, striped for an estimate. */
-function svgBar(p: Progress, status: RowStatus): string {
+function svgBar(p: Progress, color: string): string {
   const W = 120
   const H = 8
-  const color = COLORS[status]
   const w = p === null ? 0 : Math.round(W * Math.min(1, Math.max(0, p.ratio)))
   const fill = p?.isEstimate ? 'url(#s)' : color
 
@@ -692,13 +710,13 @@ export const register: Register = on => {
             shown.map(i => (
               <Text key={i.id} wrap="truncate-end">
                 {'  '.repeat(i.depth)}
-                <Text color={THEME[i.status]}>{ICON[i.status]}</Text>{' '}
+                <Text color={themeOf(i)}>{ICON[i.status]}</Text>{' '}
                 {/* The indent counts inside the name's width: the next columns line up. */}
                 {i.name.slice(0, nameWidth - i.depth * 2).padEnd(nameWidth - i.depth * 2)}{' '}
-                <Text dimColor>{i.kind.padEnd(8)}</Text>
+                <Text color={themeOf(i)}>{i.kind.padEnd(8)}</Text>
                 {i.ratio === null ? ' '.repeat(barWidth + 6) : (
                   <Text>
-                    <Text color={THEME[i.status]}>{textBar(i.ratio, barWidth, i.isEstimate)}</Text> {pct(i).padStart(4)}{' '}
+                    <Text color={themeOf(i)}>{textBar(i.ratio, barWidth, i.isEstimate)}</Text> {pct(i).padStart(4)}{' '}
                   </Text>
                 )}
                 <Text dimColor>
@@ -731,18 +749,18 @@ export const register: Register = on => {
             // Fixed columns that never shrink, the indent inside the name's: every bar starts at one place.
             <Box key={i.id} flexDirection="row" gap={2} alignItems="center">
               <Box width={nameWidth} flexShrink={0} paddingLeft={1 + i.depth * 2} flexDirection="row" gap={1}>
-                <Text color={THEME[i.status]}>{ICON[i.status]}</Text>
+                <Text color={themeOf(i)}>{ICON[i.status]}</Text>
                 <Text bold wrap="truncate-end">
                   {i.name}
                 </Text>
               </Box>
               <Box width={8} flexShrink={0}>
-                <Text dimColor>{i.kind}</Text>
+                <Text color={themeOf(i)}>{i.kind}</Text>
               </Box>
               <Box width={14} flexShrink={0} flexDirection="row" alignItems="center">
                 {i.ratio !== null && (
                   <Svg
-                    source={svgBar({ ratio: i.ratio, isEstimate: i.isEstimate }, i.status)}
+                    source={svgBar({ ratio: i.ratio, isEstimate: i.isEstimate }, colorOf(i))}
                     alt={pct(i)}
                     width={110}
                     height={8}
@@ -785,7 +803,7 @@ export const register: Register = on => {
       const { Box, Text, Button } = $.ui.resolve(e)
       const bar = (i: Item) => (
         <Text>
-          <Text color={THEME[i.status]}>{textBar(i.ratio ?? 0, barWidth, i.isEstimate)}</Text>
+          <Text color={themeOf(i)}>{textBar(i.ratio ?? 0, barWidth, i.isEstimate)}</Text>
           {` ${i.isEstimate ? '≈' : ''}${Math.round((i.ratio ?? 0) * 100)}%`}
         </Text>
       )
@@ -793,7 +811,7 @@ export const register: Register = on => {
         <Box key={i.id} flexDirection="column" marginLeft={i.depth * 2} marginBottom={1}>
           <Box flexDirection="row" justifyContent="space-between">
             <Text wrap="truncate-end">
-              <Text color={THEME[i.status]}>{ICON[i.status]}</Text> <Text bold>{i.name}</Text>
+              <Text color={themeOf(i)}>{ICON[i.status]}</Text> <Text bold>{i.name}</Text>
             </Text>
             <Text dimColor>
               {i.kind} · {i.elapsed}
@@ -824,7 +842,7 @@ export const register: Register = on => {
               </Box>
               {view.done.map(i => (
                 <Text key={i.id} dimColor wrap="truncate-end">
-                  <Text color={THEME[i.status]}>{ICON[i.status]}</Text> {i.name} · {i.kind} · {i.elapsed}
+                  <Text color={themeOf(i)}>{ICON[i.status]}</Text> {i.name} · {i.kind} · {i.elapsed}
                 </Text>
               ))}
             </Box>
@@ -838,7 +856,7 @@ export const register: Register = on => {
       <Box key={i.id} flexDirection="column" marginLeft={i.depth * 2} marginBottom={1}>
         <Box flexDirection="row" justifyContent="space-between" gap={1}>
           <Text wrap="truncate-end">
-            <Text color={THEME[i.status]}>{ICON[i.status]}</Text> <Text bold>{i.name}</Text>
+            <Text color={themeOf(i)}>{ICON[i.status]}</Text> <Text bold>{i.name}</Text>
           </Text>
           <Text dimColor>
             {i.kind} · {i.elapsed}
@@ -847,7 +865,7 @@ export const register: Register = on => {
         {i.ratio !== null && (
           <Box flexDirection="row" gap={1} alignItems="center">
             <Svg
-              source={svgBar({ ratio: i.ratio, isEstimate: i.isEstimate }, i.status)}
+              source={svgBar({ ratio: i.ratio, isEstimate: i.isEstimate }, colorOf(i))}
               alt={`${Math.round(i.ratio * 100)}%${i.isEstimate ? ' estimado' : ''}`}
               width={160}
               height={8}
@@ -879,7 +897,7 @@ export const register: Register = on => {
             </Box>
             {view.done.map(i => (
               <Text key={i.id} dimColor wrap="truncate-end">
-                <Text color={THEME[i.status]}>{ICON[i.status]}</Text> {i.name} · {i.kind} · {i.elapsed}
+                <Text color={themeOf(i)}>{ICON[i.status]}</Text> {i.name} · {i.kind} · {i.elapsed}
               </Text>
             ))}
           </Box>

@@ -374,6 +374,8 @@ export type Item = {
   name: string
   kind: string
   status: RowStatus
+  /** Who is working: the chat itself, a subagent, or a background command. */
+  role: 'main' | 'agent' | 'task'
   isTask: boolean
   /** 0 to 1 when there is a number to show; `null` draws no bar at all. */
   ratio: number | null
@@ -402,6 +404,7 @@ function toItem(row: AgentRow, depth: number, stats: Record<string, TypeStats>, 
     name: shortLabel(row.label),
     kind: kindLabel(row),
     status: row.status,
+    role: row.id === MAIN ? 'main' : row.kind === 'task' ? 'task' : 'agent',
     isTask: row.kind === 'task',
     // A guess that has not left zero yet says nothing: no bar until it moves.
     ratio: p === null || (p.isEstimate && p.ratio < 0.05) ? null : Math.min(1, Math.max(0, p.ratio)),

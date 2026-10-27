@@ -222,3 +222,17 @@ test('paths built from variables the command sets are read', () => {
   expect(polledLogs('D="C:/work"; tail -1 "${D}/build.log"', 'C:/p')).toEqual(['C:/work/build.log'])
   expect(logTargets('npm run build > $OUT/x.log', 'C:/p')).toEqual(['C:/p/$OUT/x.log'])
 })
+
+test('each kind of work keeps its own color while it runs', async ($, on) => {
+  mock.clock(on)
+  on('tool.call', { tool: 'Bash' }, shellAnswer(true))
+  await $.tool.call({ tool: 'mcp__agent-progress__progress', steps: ['a', 'b'], done: 1 })
+  await $.tool.call({ tool: 'Bash', command: 'render.sh', description: 'Render', run_in_background: true })
+  await $.tool.call({ tool: 'Bash', command: 'tail -1 render.log' })
+  const ui = await $.ui.mount({ plugin: 'agent-progress', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  await ui.press({ key: 'more' })
+  const bars = (await ui.findAll({ type: 'Svg' })).map(b => String(b.props.source))
+  expect(bars.some(b => b.includes('#D97757'))).toBe(true)
+  expect(bars.some(b => b.includes('#A371F7'))).toBe(true)
+  await ui.unmount()
+})
