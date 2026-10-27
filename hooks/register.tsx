@@ -679,10 +679,13 @@ export const register: Register = on => {
         <Box flexDirection="column">
           <Box flexDirection="row" gap={1}>
             <Text color="claude">●</Text>
-            <Text wrap="truncate-end">
-              {liveSummary(view.live)}
-              <Text dimColor>{!isOpen && lead ? `  ·  ${lead}` : ''}</Text>
-            </Text>
+            {/* Grows to the edge, so the arrow keeps its place at the far right. */}
+            <Box flexGrow={1} flexShrink={1}>
+              <Text wrap="truncate-end">
+                {liveSummary(view.live)}
+                <Text dimColor>{!isOpen && lead ? `  ·  ${lead}` : ''}</Text>
+              </Text>
+            </Box>
             <Button key="more" plain label={isOpen ? '▴' : '▾'} onPress={toggle} />
           </Box>
           {isOpen &&
@@ -710,12 +713,15 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap={isOpen ? 1 : 0}>
-        <Box flexDirection="row" gap={1}>
+        <Box flexDirection="row" gap={1} alignItems="center">
           <Text color="claude">●</Text>
-          <Text wrap="truncate-end">
-            {liveSummary(view.live)}
-            <Text dimColor>{!isOpen && lead ? `  ·  ${lead}` : ''}</Text>
-          </Text>
+          {/* Grows to the edge, so the arrow keeps its place at the far right. */}
+          <Box flexGrow={1} flexShrink={1}>
+            <Text wrap="truncate-end">
+              {liveSummary(view.live)}
+              <Text dimColor>{!isOpen && lead ? `  ·  ${lead}` : ''}</Text>
+            </Text>
+          </Box>
           <Button key="more" plain label={isOpen ? '▴' : '▾'} onPress={toggle} />
         </Box>
         {isOpen &&
