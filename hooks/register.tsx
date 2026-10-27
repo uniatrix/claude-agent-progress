@@ -208,7 +208,8 @@ async function openOnWork($: Engine): Promise<void> {
   const began = isBusy && !wasBusy
   wasBusy = isBusy
   if (!began || (await read($, isPaneDismissed)) || (await isPaneShown($))) return
-  await openPane($, false)
+  const opened = await openPane($, false)
+  noteRender('pane:open', opened.isPlaced ? 'placed' : `waits: ${opened.reason}`)
 }
 
 let ticks = 0

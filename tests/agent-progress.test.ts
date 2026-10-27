@@ -210,3 +210,11 @@ test('Agent and background shells are asked for names that fit the app task list
   expect(bash.description).toContain('run_in_background')
   expect(read.description).toBe('base Read')
 })
+
+test('paths built from variables the command sets are read', () => {
+  expect(logTargets('SP=/tmp/s/pad; for i in 1 2; do echo $i; done > $SP/render.log 2>&1', 'C:/p')).toEqual([
+    '/tmp/s/pad/render.log',
+  ])
+  expect(polledLogs('D="C:/work"; tail -1 "${D}/build.log"', 'C:/p')).toEqual(['C:/work/build.log'])
+  expect(logTargets('npm run build > $OUT/x.log', 'C:/p')).toEqual(['C:/p/$OUT/x.log'])
+})

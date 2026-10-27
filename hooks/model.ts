@@ -110,6 +110,28 @@ function resolveIn(base: string, path: string): string {
   return `${toHostPath(base).replace(/\/+$/, '')}/${p.replace(/^\.\//, '')}`
 }
 
+const ASSIGN = /(?:^|[;&|\s])([A-Za-z_]\w*)=(?:"([^"$`]*)"|'([^']*)'|([^\s;&|"'$`]+))(?=[\s;&|]|$)/g
+
+/**
+ * The command with the variables it sets itself (`SP=/tmp/x; ... > $SP/a.log`)
+ * written out, so the paths it names can be read. Others are left as they are.
+ */
+export function expandOwnVars(command: string): string {
+  const vars = new Map<string, string>()
+  for (const m of command.matchAll(ASSIGN)) {
+    const name = m[1]
+    const value = m[2] ?? m[3] ?? m[4]
+    if (name !== undefined && value !== undefined) vars.set(name, value)
+  }
+  if (vars.size === 0) return command
+
+  return command.replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (all, braced: string | undefined, bare: string | undefined) => {
+    const value = vars.get(braced ?? bare ?? '')
+
+    return value ?? all
+  })
+}
+
 /** The directory a command runs in: its leading `cd`, else the session's. */
 export function commandDir(command: string, cwd: string): string {
   const m = LEADING_CD.exec(command)
@@ -129,7 +151,8 @@ function collect(pattern: RegExp, command: string, dir: string, out: string[]): 
 }
 
 /** The files a command sends its output to: `> work/render.log`, `| tee run.log`. */
-export function logTargets(command: string, cwd: string): string[] {
+export function logTargets(raw: string, cwd: string): string[] {
+  const command = expandOwnVars(raw)
   const dir = commandDir(command, cwd)
   const out: string[] = []
   collect(REDIRECT, command, dir, out)
@@ -139,8 +162,9 @@ export function logTargets(command: string, cwd: string): string[] {
 }
 
 /** The logs a command reads (`tail -c 400 work/render.log`), when it reads any. */
-export function polledLogs(command: string, cwd: string): string[] {
-  if (!READS.test(command)) return []
+export function polledLogs(raw: string, cwd: string): string[] {
+  if (!READS.test(raw)) return []
+  const command = expandOwnVars(raw)
   const dir = commandDir(command, cwd)
   const out: string[] = []
   collect(LOG_NAME, command, dir, out)
