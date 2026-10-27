@@ -199,3 +199,14 @@ test('the panel follows the log a background command writes, without the agent c
   expect(await ui.find({ text: /time remaining/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('Agent and background shells are asked for names that fit the app task list', async ($, on) => {
+  on('tool.describe', (_, e) => ({ description: `base ${e.tool}` }))
+  const provider = { plugin: 'engine', tier: 'core' } as const
+  const agent = await $.tool.describe({ tool: 'Agent', description: 'base Agent', provider })
+  const bash = await $.tool.describe({ tool: 'Bash', description: 'base Bash', provider })
+  const read = await $.tool.describe({ tool: 'Read', description: 'base Read', provider })
+  expect(agent.description).toContain('16 characters at most')
+  expect(bash.description).toContain('run_in_background')
+  expect(read.description).toBe('base Read')
+})

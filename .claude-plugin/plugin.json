@@ -1,6 +1,6 @@
 {
   "name": "agent-progress",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Painel ao lado do chat com o progresso de cada agente, subagente e tarefa em background da sessão.",
   "author": { "name": "uniatrix" },
   "types": "./types/index.d.ts"

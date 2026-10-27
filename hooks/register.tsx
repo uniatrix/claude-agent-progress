@@ -53,6 +53,11 @@ const SUBAGENT_NOTE = [
   `Progresso: o usuário acompanha este trabalho numa barra de progresso. Se a tarefa tiver mais de uma etapa, chame a ferramenta ${TOOL_NAME} logo no início com \`steps\` (3 a 8 etapas curtas) e \`done: 0\`, e de novo com \`done\` atualizado a cada etapa concluída. Não use TaskCreate nem TodoWrite para isso.`,
 ].join('\n')
 
+const NAME_RULE =
+  'write 2 or 3 words, the key one first, 16 characters at most (e.g. "Render ep. 1", "Busca deploy"), in the language the user writes in.'
+const AGENT_NAME_NOTE = `Naming: \`description\` is the name the user reads in a narrow list of running work that cuts it at about 16 characters: ${NAME_RULE}`
+const SHELL_NAME_NOTE = `Naming: when \`run_in_background\` is true, \`description\` is the name the user reads in a narrow list of running work that cuts it at about 16 characters: ${NAME_RULE}`
+
 const MAIN_NOTE = [
   '# Painel de progresso',
   'O usuário acompanha o trabalho por barras de progresso num painel. Em tarefas com 3 ou mais etapas, mantenha uma checklist enquanto trabalha:',
@@ -378,6 +383,15 @@ export const register: Register = on => {
         ? 'Painel de agentes aberto.'
         : `Painel de agentes aguardando espaço na tela: ${opened.reason}`,
     }
+  })
+
+  // The app lists running work in a narrow column that cuts names at about 16
+  // characters: the name is the call's `description`, so ask for one that fits.
+  on('tool.describe', async ($, e, next) => {
+    const out = await next(e)
+    const note = e.tool === 'Agent' ? AGENT_NAME_NOTE : e.tool === 'Bash' || e.tool === 'PowerShell' ? SHELL_NAME_NOTE : ''
+
+    return note ? { ...out, description: `${out.description}\n\n${note}` } : out
   })
 
   on('prompt.context', ($, e, next) =>
