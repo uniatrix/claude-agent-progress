@@ -156,7 +156,7 @@ test('work with no number to show draws no bar, only what it is doing', async ($
   }
 })
 
-test('the chat keeps one line with the way to the panel', async ($, on) => {
+test('the chat keeps one line that opens into the full list in place', async ($, on) => {
   mock.clock(on)
   on('tool.call', { tool: 'Bash' }, shellAnswer(true))
   await $.tool.call({ tool: 'Bash', command: 'render.sh', description: 'Renderizar o vídeo', run_in_background: true })
@@ -165,7 +165,11 @@ test('the chat keeps one line with the way to the panel', async ($, on) => {
     const ui = await $.ui.mount({ plugin: 'agent-progress', surface, component: 'AbovePrompt', props: BAND })
     expect(await ui.find({ text: /1 em background/ })).toBeDefined()
     expect(await ui.find({ text: /Renderizar o vídeo 50%/ })).toBeDefined()
-    expect(await ui.find({ key: 'open' })).toBeDefined()
+    await ui.press({ key: 'more' })
+    expect(await ui.find({ text: /comando/ })).toBeDefined()
+    expect(await ui.find({ text: /▴/ })).toBeDefined()
+    await ui.press({ key: 'more' })
+    expect(await ui.find({ text: /comando/ })).toBeUndefined()
     await ui.unmount()
   }
 })

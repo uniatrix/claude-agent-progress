@@ -37,6 +37,7 @@ const KEEP_MS = 30 * 60_000
 const rows = atom({ plugin: 'agent-progress', key: 'rows' } as const, {})
 const now = atom({ plugin: 'agent-progress', key: 'now' } as const, 0)
 const isPaneDismissed = atom({ plugin: 'agent-progress', key: 'isPaneDismissed' } as const, false)
+const isBandExpanded = atom({ plugin: 'agent-progress', key: 'isBandExpanded' } as const, false)
 const stats = atom({ plugin: 'agent-progress', key: 'stats' } as const, {})
 
 const TOOL_DESCRIPTION = [
@@ -175,6 +176,11 @@ async function syncList($: Engine, t: number): Promise<void> {
 
     return out
   })
+}
+
+/** `62%`, or `≈62%` for an estimate. */
+function pct(i: Item): string {
+  return `${i.isEstimate ? '≈' : ''}${Math.round((i.ratio ?? 0) * 100)}%`
 }
 
 /** Opens the panel; `asked` is the person's own ask, which also undoes a close. */
@@ -649,28 +655,99 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const view = viewOf(await read($, rows), await read($, stats), await nowOf($))
-    // The panel is the place; the chat shows one line only while it is closed.
+    // While the panel shows, the chat stays clean.
     if (view.live.length === 0 || (await isPaneShown($))) {
       noteRender(`band:${e.surface}`, view.live.length === 0 ? 'passed: nothing live' : 'passed: pane shown')
 
       return next(e)
     }
-    noteRender(`band:${e.surface}`, `drew line (${view.live.length} live)`)
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const isOpen = await read($, isBandExpanded)
+    noteRender(`band:${e.surface}`, `drew ${isOpen ? 'list' : 'line'} (${view.live.length} live)`)
     const first = view.live.find(i => i.id !== MAIN) ?? view.live[0]
-    const lead =
-      first === undefined
-        ? ''
-        : `${first.name}${first.ratio === null ? '' : ` ${first.isEstimate ? '≈' : ''}${Math.round(first.ratio * 100)}%`}`
+    const lead = first === undefined ? '' : `${first.name}${first.ratio === null ? '' : ` ${pct(first)}`}`
+    const toggle = () => update($, isBandExpanded, v => !v)
+    const room = Math.max(1, e.props.maxRows - 2)
+    const shown = view.live.slice(0, room)
+    const more = view.live.length - shown.length
+    const nameWidth = Math.max(12, Math.min(28, Math.floor(e.props.bodyColumns / 3)))
+
+    if (e.surface === 'terminal') {
+      const { Box, Text, Button } = $.ui.resolve(e)
+      const barWidth = e.props.bodyColumns >= 100 ? 14 : 8
+
+      return (
+        <Box flexDirection="column">
+          <Box flexDirection="row" gap={1}>
+            <Text color="claude">●</Text>
+            <Text wrap="truncate-end">
+              {liveSummary(view.live)}
+              <Text dimColor>{!isOpen && lead ? `  ·  ${lead}` : ''}</Text>
+            </Text>
+            <Button key="more" plain label={isOpen ? '▴' : '▾'} onPress={toggle} />
+          </Box>
+          {isOpen &&
+            shown.map(i => (
+              <Text key={i.id} wrap="truncate-end">
+                {'  '.repeat(i.depth)}
+                <Text color={THEME[i.status]}>{ICON[i.status]}</Text> {i.name.padEnd(nameWidth).slice(0, nameWidth)}{' '}
+                <Text dimColor>{i.kind.padEnd(8)}</Text>
+                {i.ratio === null ? ' '.repeat(barWidth + 6) : (
+                  <Text>
+                    <Text color={THEME[i.status]}>{textBar(i.ratio, barWidth, i.isEstimate)}</Text> {pct(i).padStart(4)}{' '}
+                  </Text>
+                )}
+                <Text dimColor>
+                  {i.elapsed.padStart(6)}  {i.step ?? i.action ?? ''}
+                </Text>
+              </Text>
+            ))}
+          {isOpen && more > 0 && <Text dimColor>  +{more} (/agentes)</Text>}
+        </Box>
+      )
+    }
+
+    const { Box, Text, Button, Svg } = $.ui.resolve(e)
 
     return (
-      <Box flexDirection="row" gap={1}>
-        <Text color="claude">●</Text>
-        <Text wrap="truncate-end">
-          {liveSummary(view.live)}
-          <Text dimColor>{lead ? `  ·  ${lead}` : ''}</Text>
-        </Text>
-        <Button key="open" plain label="abrir painel" onPress={() => openPane($, true)} />
+      <Box flexDirection="column" gap={isOpen ? 1 : 0}>
+        <Box flexDirection="row" gap={1}>
+          <Text color="claude">●</Text>
+          <Text wrap="truncate-end">
+            {liveSummary(view.live)}
+            <Text dimColor>{!isOpen && lead ? `  ·  ${lead}` : ''}</Text>
+          </Text>
+          <Button key="more" plain label={isOpen ? '▴' : '▾'} onPress={toggle} />
+        </Box>
+        {isOpen &&
+          shown.map(i => (
+            <Box key={i.id} flexDirection="row" gap={1} alignItems="center" marginLeft={1 + i.depth * 2}>
+              <Text color={THEME[i.status]}>{ICON[i.status]}</Text>
+              <Box width={nameWidth}>
+                <Text bold wrap="truncate-end">
+                  {i.name}
+                </Text>
+              </Box>
+              <Box width={8}>
+                <Text dimColor>{i.kind}</Text>
+              </Box>
+              <Box width={150}>
+                {i.ratio !== null && (
+                  <Svg
+                    source={svgBar({ ratio: i.ratio, isEstimate: i.isEstimate }, i.status)}
+                    alt={pct(i)}
+                    width={110}
+                    height={8}
+                  />
+                )}
+                {i.ratio !== null && <Text> {pct(i)}</Text>}
+              </Box>
+              <Text dimColor>{i.elapsed}</Text>
+              <Text dimColor wrap="truncate-end">
+                {i.step ?? i.action ?? ''}
+              </Text>
+            </Box>
+          ))}
+        {isOpen && more > 0 && <Text dimColor>+{more} (/agentes)</Text>}
       </Box>
     )
   })
@@ -728,7 +805,7 @@ export const register: Register = on => {
                 <Text dimColor bold>
                   Concluídos
                 </Text>
-                <Button key="clear" plain label="limpar" onPress={clear} />
+                <Button key="clear" plain label="✕" onPress={clear} />
               </Box>
               {view.done.map(i => (
                 <Text key={i.id} dimColor wrap="truncate-end">
@@ -783,7 +860,7 @@ export const register: Register = on => {
               <Text dimColor bold>
                 Concluídos
               </Text>
-              <Button key="clear" plain label="limpar" onPress={clear} />
+              <Button key="clear" plain label="✕" onPress={clear} />
             </Box>
             {view.done.map(i => (
               <Text key={i.id} dimColor wrap="truncate-end">

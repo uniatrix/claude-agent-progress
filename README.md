@@ -21,7 +21,7 @@ Concluídos  limpar
 ✓ Estrutura do site · busca · 48s
 ```
 
-O painel abre sozinho quando algum trabalho começa. Se você fechar, ele fica fechado na sessão e o chat mostra só uma linha ("1 agente · Mapa do emulador 62%") com o botão **abrir painel**. `/agentes` também abre.
+O painel abre sozinho quando algum trabalho começa. Se você fechar, o chat fica com uma linha ("1 agente · Mapa do emulador 62%"); a seta `▾` abre a lista completa ali mesmo e `▴` recolhe. `/agentes` reabre o painel.
 
 ## Instalar
 

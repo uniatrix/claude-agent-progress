@@ -40,6 +40,7 @@ declare module 'claude-code' {
       rows: Record<string, AgentRow>
       now: number
       isPaneDismissed: boolean
+      isBandExpanded: boolean
       stats: Record<string, TypeStats>
     }
   }
