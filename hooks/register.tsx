@@ -19,9 +19,11 @@ import {
   stepsFromList,
   textBar,
   treeOrder,
+  viewOf,
+  liveSummary,
   withDone,
 } from './model'
-import type { Progress } from './model'
+import type { Item, Progress } from './model'
 
 const P = 'agent-progress'
 const PANE = 'agentes'
@@ -34,7 +36,7 @@ const KEEP_MS = 30 * 60_000
 
 const rows = atom({ plugin: 'agent-progress', key: 'rows' } as const, {})
 const now = atom({ plugin: 'agent-progress', key: 'now' } as const, 0)
-const isBandHidden = atom({ plugin: 'agent-progress', key: 'isBandHidden' } as const, false)
+const isPaneDismissed = atom({ plugin: 'agent-progress', key: 'isPaneDismissed' } as const, false)
 const stats = atom({ plugin: 'agent-progress', key: 'stats' } as const, {})
 
 const TOOL_DESCRIPTION = [
@@ -115,12 +117,6 @@ const ICON: Record<RowStatus, string> = {
   killed: '✗',
 }
 
-const STEP_ICON: Record<Step['status'], string> = {
-  completed: '✓',
-  in_progress: '◐',
-  pending: '○',
-}
-
 /** The remote surfaces' bar: solid for a checklist, striped for an estimate. */
 function svgBar(p: Progress, status: RowStatus): string {
   const W = 120
@@ -138,24 +134,6 @@ function svgBar(p: Progress, status: RowStatus): string {
     w > 0 ? `<rect width="${w}" height="${H}" rx="4" fill="${fill}"/>` : '',
     '</svg>',
   ].join('')
-}
-
-function stepNow(row: AgentRow): string | undefined {
-  const running = row.steps.find(s => s.status === 'in_progress')
-
-  return running?.subject
-}
-
-function summary(all: Record<string, AgentRow>): string {
-  const c = countRows(all)
-  const parts = [
-    c.running > 0 ? `${c.running} rodando` : '',
-    c.waiting > 0 ? `${c.waiting} aguardando` : '',
-    c.done > 0 ? `${c.done} concluído${c.done > 1 ? 's' : ''}` : '',
-    c.failed > 0 ? `${c.failed} com falha` : '',
-  ].filter(Boolean)
-
-  return parts.length > 0 ? parts.join(' · ') : 'nenhum agente'
 }
 
 async function syncList($: Engine, t: number): Promise<void> {
@@ -192,6 +170,40 @@ async function syncList($: Engine, t: number): Promise<void> {
 
     return out
   })
+}
+
+/** Opens the panel; `asked` is the person's own ask, which also undoes a close. */
+async function openPane($: Engine, asked: boolean) {
+  if (asked) await update($, isPaneDismissed, () => false)
+
+  return $.ui.open({ id: PANE, title: 'Agentes' })
+}
+
+async function isPaneShown($: Engine): Promise<boolean> {
+  try {
+    return (await $.ui.panes()).some(p => p.id === PANE && p.isShown)
+  } catch {
+    return false
+  }
+}
+
+/** The clock as the last tick saw it, never before the newest row started. */
+async function nowOf($: Engine): Promise<number> {
+  const all = await read($, rows)
+
+  return Math.max(await read($, now), ...Object.values(all).map(r => r.startedAt))
+}
+
+let wasBusy = false
+
+/** Work began: open the panel beside the chat, unless the person closed it. */
+async function openOnWork($: Engine): Promise<void> {
+  const view = viewOf(await read($, rows), await read($, stats), await nowOf($))
+  const isBusy = view.live.length > 0
+  const began = isBusy && !wasBusy
+  wasBusy = isBusy
+  if (!began || (await read($, isPaneDismissed)) || (await isPaneShown($))) return
+  await openPane($, false)
 }
 
 let ticks = 0
@@ -317,6 +329,7 @@ async function tick($: Engine): Promise<void> {
   // Each step on its own: one that fails (no agent list, say) leaves the others running.
   if (isActive || ticks % 10 === 0) await syncList($, t).catch(() => undefined)
   if (isActive && ticks % 2 === 0) await readTaskOutputs($).catch(() => undefined)
+  await openOnWork($).catch(() => undefined)
 }
 
 export const register: Register = on => {
@@ -358,8 +371,7 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'agentes' }, async $ => {
-    await update($, isBandHidden, () => false)
-    const opened = await $.ui.open({ id: PANE, title: 'Agentes' })
+    const opened = await openPane($, true)
 
     return {
       text: opened.isPlaced
@@ -417,7 +429,7 @@ export const register: Register = on => {
       const report = {
         surfaces: await $.session.surfaces(),
         panes: await $.ui.panes(),
-        isBandHidden: await read($, isBandHidden),
+        isPaneDismissed: await read($, isPaneDismissed),
         renders,
         rows: treeOrder(all).map(({ row, depth }) => ({
           depth,
@@ -475,7 +487,11 @@ export const register: Register = on => {
     const ran = await next(e)
     if (ran.deny !== undefined) return ran
 
-    if (e.tool === 'Bash' || e.tool === 'PowerShell') {
+    // PowerShell is Windows' alone: compared as a string so every build types it.
+    if (tool === 'Bash' || tool === 'PowerShell') {
+      const shell = e as unknown as { command?: unknown; description?: unknown }
+      const command = typeof shell.command === 'string' ? shell.command : ''
+      const description = typeof shell.description === 'string' ? shell.description : ''
       const out = ran.result as { backgroundTaskId?: unknown } | undefined
       const bg = typeof out?.backgroundTaskId === 'string' ? out.backgroundTaskId : undefined
       const text = ran.text ?? ''
@@ -486,14 +502,14 @@ export const register: Register = on => {
         const path = OUTPUT_PATH.exec(text)?.[1]
         await patch($, id, prev => ({
           ...(prev ?? fresh(id, t)),
-          label: clip(e.description || e.command, 60),
+          label: clip(description || command, 60),
           type: 'shell',
           kind: 'task',
           parentId: key,
           status: 'running',
           outputPath: path ?? prev?.outputPath,
           // Where the command sends its own output (`> work/render.log`): read from now on.
-          logPaths: logTargets(e.command, cwd),
+          logPaths: logTargets(command, cwd),
         }))
       } else {
         // A check on background work's own log (`tail work/render.log`, printing
@@ -501,7 +517,7 @@ export const register: Register = on => {
         // task, the log and the progress are its, and the log is read from now on.
         const tail = text.slice(-TAIL)
         const ratio = parseOutputProgress(tail)
-        const logs = polledLogs(e.command, cwd)
+        const logs = polledLogs(command, cwd)
         if (ratio !== undefined || logs.length > 0) {
           const line = lastLine(tail)
           await update($, rows, all => {
@@ -608,124 +624,47 @@ export const register: Register = on => {
     return next(e)
   })
 
+  on('ui.close', async ($, e, next) => {
+    // Closed by the person: stays closed this session, the chat keeps one line.
+    if (e.id === PANE && e.origin.kind === 'person') await update($, isPaneDismissed, () => true)
+
+    return next(e)
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) {
-      noteRender(`band:${e.surface}`, 'passed: survey')
+    if (e.props.hasSurvey) return next(e)
+    const view = viewOf(await read($, rows), await read($, stats), await nowOf($))
+    // The panel is the place; the chat shows one line only while it is closed.
+    if (view.live.length === 0 || (await isPaneShown($))) {
+      noteRender(`band:${e.surface}`, view.live.length === 0 ? 'passed: nothing live' : 'passed: pane shown')
 
       return next(e)
     }
-    const all = await read($, rows)
-    const t = Math.max(await read($, now), ...Object.values(all).map(r => r.startedAt))
-    const known = await read($, stats)
-    const hasOthers = Object.values(all).some(r => r.id !== MAIN && isLive(r.status))
-    const shown = treeOrder(all).filter(({ row }) =>
-      row.id === MAIN
-        ? // A short answer would only flash the band: wait for a few tool calls.
-          row.status === 'running' && (row.steps.length > 0 || hasOthers || row.tools >= 3)
-        : isLive(row.status) || (row.endedAt !== undefined && t - row.endedAt < LINGER_MS),
-    )
-    if (shown.length === 0) {
-      noteRender(`band:${e.surface}`, 'passed: nothing live')
-
-      return next(e)
-    }
-    if (await read($, isBandHidden)) {
-      // Minimized: one line, and the way back on it.
-      noteRender(`band:${e.surface}`, 'drew minimized')
-      const { Box, Text, Button } = $.ui.resolve(e)
-
-      return (
-        <Box flexDirection="row" gap={1}>
-          <Text bold>Agentes</Text>
-          <Text dimColor>{summary(all)}</Text>
-          <Button key="show" plain label="mostrar" onPress={() => update($, isBandHidden, () => false)} />
-        </Box>
-      )
-    }
-    noteRender(`band:${e.surface}`, `drew ${shown.length} rows (${e.props.bodyColumns} cols, ${e.props.maxRows} rows)`)
-
-    const room = Math.max(1, e.props.maxRows - 1)
-    const visible = shown.slice(0, room)
-    const hidden = shown.length - visible.length
-    const cols = e.props.bodyColumns
-    const barWidth = cols >= 110 ? 16 : 10
-    const labelWidth = cols >= 110 ? 28 : 18
-
-    if (e.surface === 'terminal') {
-      const { Box, Text, Button } = $.ui.resolve(e)
-
-      return (
-        <Box flexDirection="column">
-          <Box flexDirection="row" gap={1}>
-            <Text bold>Agentes</Text>
-            <Text dimColor>{summary(all)}</Text>
-            <Button key="open" plain label="detalhes" onPress={() => $.ui.open({ id: PANE, title: 'Agentes' })} />
-            <Button key="hide" plain label="minimizar" onPress={() => update($, isBandHidden, () => true)} />
-          </Box>
-          {visible.map(({ row, depth }) => {
-            const p = progressOf(row, known, t)
-            const label = `${'  '.repeat(depth)}${clip(row.label, labelWidth - depth * 2)}`.padEnd(labelWidth)
-            const bar = p === null ? '·'.repeat(barWidth) : textBar(p.ratio, barWidth, p.isEstimate)
-            const elapsed = duration((row.endedAt ?? t) - row.startedAt).padStart(6)
-            const step = stepNow(row)
-            const detail = [step, row.current].filter(Boolean).join(' · ')
-
-            return (
-              <Text key={row.id} wrap="truncate-end">
-                <Text color={THEME[row.status]}>{ICON[row.status]}</Text> {label}{' '}
-                <Text color={THEME[row.status]}>{bar}</Text> {percent(p)} <Text dimColor>{elapsed}  {detail}</Text>
-              </Text>
-            )
-          })}
-          {hidden > 0 && <Text dimColor>+{hidden} (veja /agentes)</Text>}
-        </Box>
-      )
-    }
-
-    const { Box, Text, Button, Svg } = $.ui.resolve(e)
+    noteRender(`band:${e.surface}`, `drew line (${view.live.length} live)`)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const first = view.live.find(i => i.id !== MAIN) ?? view.live[0]
+    const lead =
+      first === undefined
+        ? ''
+        : `${first.name}${first.ratio === null ? '' : ` ${first.isEstimate ? '≈' : ''}${Math.round(first.ratio * 100)}%`}`
 
     return (
-      <Box flexDirection="column">
-        <Box flexDirection="row" gap={1}>
-          <Text bold>Agentes</Text>
-          <Text dimColor>{summary(all)}</Text>
-          <Button key="open" plain label="detalhes" onPress={() => $.ui.open({ id: PANE, title: 'Agentes' })} />
-          <Button key="hide" plain label="minimizar" onPress={() => update($, isBandHidden, () => true)} />
-        </Box>
-        {visible.map(({ row, depth }) => {
-          const p = progressOf(row, known, t)
-          const step = stepNow(row)
-          const detail = [step, row.current].filter(Boolean).join(' · ')
-
-          return (
-            <Box key={row.id} flexDirection="row" gap={1} alignItems="center" marginLeft={depth * 2}>
-              <Text color={THEME[row.status]}>{ICON[row.status]}</Text>
-              <Text wrap="truncate-end">{clip(row.label, 40)}</Text>
-              <Svg
-                source={svgBar(p, row.status)}
-                alt={p === null ? 'sem checklist' : `${Math.round(p.ratio * 100)}%${p.isEstimate ? ' estimado' : ''}`}
-                width={120}
-                height={8}
-              />
-              <Text>{percent(p).trim()}</Text>
-              <Text dimColor>{duration((row.endedAt ?? t) - row.startedAt)}</Text>
-              <Text dimColor wrap="truncate-end">{detail}</Text>
-            </Box>
-          )
-        })}
-        {hidden > 0 && <Text dimColor>+{hidden} (veja /agentes)</Text>}
+      <Box flexDirection="row" gap={1}>
+        <Text color="claude">●</Text>
+        <Text wrap="truncate-end">
+          {liveSummary(view.live)}
+          <Text dimColor>{lead ? `  ·  ${lead}` : ''}</Text>
+        </Text>
+        <Button key="open" plain label="abrir painel" onPress={() => openPane($, true)} />
       </Box>
     )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const all = await read($, rows)
-    const t = Math.max(await read($, now), ...Object.values(all).map(r => r.startedAt))
-    const known = await read($, stats)
-    const list = treeOrder(all)
-    noteRender(`pane:${e.surface}`, `drew ${list.length} rows (${e.props.placement})`)
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const barWidth = Math.max(8, Math.min(20, e.props.bodyColumns - 40))
+    const view = viewOf(await read($, rows), await read($, stats), await nowOf($))
+    noteRender(`pane:${e.surface}`, `drew ${view.live.length} live, ${view.done.length} done (${e.props.placement})`)
+    const cols = Math.max(24, e.props.bodyColumns)
+    const barWidth = Math.max(8, Math.min(24, cols - 14))
 
     const clear = () =>
       update($, rows, current => {
@@ -735,59 +674,109 @@ export const register: Register = on => {
         return out
       })
 
-    return (
-      <Box flexDirection="column">
-        <Box flexDirection="row" gap={1}>
-          <Text dimColor>{summary(all)}</Text>
-          <Button key="clear" plain label="limpar concluídos" onPress={clear} />
+    if (e.surface === 'terminal') {
+      const { Box, Text, Button } = $.ui.resolve(e)
+      const bar = (i: Item) => (
+        <Text>
+          <Text color={THEME[i.status]}>{textBar(i.ratio ?? 0, barWidth, i.isEstimate)}</Text>
+          {` ${i.isEstimate ? '≈' : ''}${Math.round((i.ratio ?? 0) * 100)}%`}
+        </Text>
+      )
+      const card = (i: Item) => (
+        <Box key={i.id} flexDirection="column" marginLeft={i.depth * 2} marginBottom={1}>
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text wrap="truncate-end">
+              <Text color={THEME[i.status]}>{ICON[i.status]}</Text> <Text bold>{i.name}</Text>
+            </Text>
+            <Text dimColor>
+              {i.kind} · {i.elapsed}
+            </Text>
+          </Box>
+          {i.ratio !== null && bar(i)}
+          {i.step && <Text wrap="truncate-end">{i.step}</Text>}
+          {i.action && (
+            <Text dimColor wrap="truncate-end">
+              {i.action}
+            </Text>
+          )}
         </Box>
-        {list.length === 0 && <Text dimColor>Nenhum agente nesta sessão ainda.</Text>}
-        {list.map(({ row, depth }) => {
-          const p = progressOf(row, known, t)
-          const pad = '  '.repeat(depth)
-          const bar = p === null ? '·'.repeat(barWidth) : textBar(p.ratio, barWidth, p.isEstimate)
-          const seen = known[row.type]
-          const basis =
-            row.kind === 'task'
-              ? p === null
-                ? 'em background, sem progresso impresso'
-                : 'progresso impresso pelo comando'
-              : p === null
-              ? 'sem checklist'
-              : p.isEstimate
-                ? seen && seen.runs > 0
-                  ? `estimado: ${row.tools} de ~${Math.round(seen.tools)} ferramentas (${seen.runs} execuções de ${row.type})`
-                  : `estimado: ${row.tools} ferramentas, sem histórico de ${row.type}`
-                : row.steps.length > 0
-                  ? `checklist ${row.steps.filter(s => s.status === 'completed').length}/${row.steps.length}`
-                  : ''
+      )
 
-          return (
-            <Box key={row.id} flexDirection="column" marginTop={depth === 0 ? 1 : 0}>
-              <Text wrap="truncate-end">
-                {pad}
-                <Text color={THEME[row.status]}>{ICON[row.status]}</Text> <Text bold>{row.label}</Text>{' '}
-                <Text dimColor>({row.type})</Text>
-              </Text>
-              <Text wrap="truncate-end">
-                {pad}  <Text color={THEME[row.status]}>{bar}</Text> {percent(p)}{' '}
-                <Text dimColor>
-                  {duration((row.endedAt ?? t) - row.startedAt)} · {basis}
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>{liveSummary(view.live)}</Text>
+          <Text> </Text>
+          {view.live.map(card)}
+          {view.done.length > 0 && (
+            <Box flexDirection="column">
+              <Box flexDirection="row" gap={1}>
+                <Text dimColor bold>
+                  Concluídos
                 </Text>
-              </Text>
-              {row.current && isLive(row.status) && (
-                <Text dimColor wrap="truncate-end">
-                  {pad}  {row.current}
-                </Text>
-              )}
-              {row.steps.map(s => (
-                <Text key={`${row.id}:${s.id}`} wrap="truncate-end" dimColor={s.status === 'completed'}>
-                  {pad}    {STEP_ICON[s.status]} {s.subject}
+                <Button key="clear" plain label="limpar" onPress={clear} />
+              </Box>
+              {view.done.map(i => (
+                <Text key={i.id} dimColor wrap="truncate-end">
+                  <Text color={THEME[i.status]}>{ICON[i.status]}</Text> {i.name} · {i.kind} · {i.elapsed}
                 </Text>
               ))}
             </Box>
-          )
-        })}
+          )}
+        </Box>
+      )
+    }
+
+    const { Box, Text, Button, Svg } = $.ui.resolve(e)
+    const card = (i: Item) => (
+      <Box key={i.id} flexDirection="column" marginLeft={i.depth * 2} marginBottom={1}>
+        <Box flexDirection="row" justifyContent="space-between" gap={1}>
+          <Text wrap="truncate-end">
+            <Text color={THEME[i.status]}>{ICON[i.status]}</Text> <Text bold>{i.name}</Text>
+          </Text>
+          <Text dimColor>
+            {i.kind} · {i.elapsed}
+          </Text>
+        </Box>
+        {i.ratio !== null && (
+          <Box flexDirection="row" gap={1} alignItems="center">
+            <Svg
+              source={svgBar({ ratio: i.ratio, isEstimate: i.isEstimate }, i.status)}
+              alt={`${Math.round(i.ratio * 100)}%${i.isEstimate ? ' estimado' : ''}`}
+              width={160}
+              height={8}
+            />
+            <Text>{`${i.isEstimate ? '≈' : ''}${Math.round(i.ratio * 100)}%`}</Text>
+          </Box>
+        )}
+        {i.step && <Text wrap="truncate-end">{i.step}</Text>}
+        {i.action && (
+          <Text dimColor wrap="truncate-end">
+            {i.action}
+          </Text>
+        )}
+      </Box>
+    )
+
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>{liveSummary(view.live)}</Text>
+        <Text> </Text>
+        {view.live.map(card)}
+        {view.done.length > 0 && (
+          <Box flexDirection="column">
+            <Box flexDirection="row" gap={1}>
+              <Text dimColor bold>
+                Concluídos
+              </Text>
+              <Button key="clear" plain label="limpar" onPress={clear} />
+            </Box>
+            {view.done.map(i => (
+              <Text key={i.id} dimColor wrap="truncate-end">
+                <Text color={THEME[i.status]}>{ICON[i.status]}</Text> {i.name} · {i.kind} · {i.elapsed}
+              </Text>
+            ))}
+          </Box>
+        )}
       </Box>
     )
   })

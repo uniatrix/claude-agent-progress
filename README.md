@@ -1,13 +1,27 @@
 # agent-progress
 
-Mod para o Claude Code que mostra, acima do prompt, uma barra de progresso para cada agente e subagente que está rodando na sessão. Funciona no terminal e no app desktop.
+Mod para o Claude Code que mostra, num painel ao lado do chat, o que cada agente, subagente e tarefa em background da sessão está fazendo, com barra de progresso quando há um número de verdade. Funciona no app desktop e no terminal.
 
 ```
-Agentes  1 rodando · 2 concluídos                  detalhes  ocultar
-● Conversa principal          ············   …   2m00s
-  ✓ Mapa do emulador          ████████████ 100%    27s  Relatório entregue
-  ● Estrutura do site         ▒▒▒▒▒▒▒▒▒▒░░ ~92%    42s  Montar relatório
+2 agentes · 1 em background
+
+● Mapa do emulador                 busca · 1m20s
+  ███████████████░░░░░░░░░  62%
+  etapa 4 de 6: Resumir os temas
+  Lendo process_ci_deploy.md
+
+● Renderizar o episódio          comando · 4m02s
+  ██████████████████████░░  84%
+  Rendered 13914/16638, time remaining: 6m
+
+● Pesquisa de logs                agente · 45s
+  Buscando "deploy"
+
+Concluídos  limpar
+✓ Estrutura do site · busca · 48s
 ```
+
+O painel abre sozinho quando algum trabalho começa. Se você fechar, ele fica fechado na sessão e o chat mostra só uma linha ("1 agente · Mapa do emulador 62%") com o botão **abrir painel**. `/agentes` também abre.
 
 ## Instalar
 
@@ -29,9 +43,12 @@ Responda `y` para adicionar o marketplace e escolha o escopo de usuário. Depois
 
 Comandos rodando em background (uma renderização, um build, um servidor) também aparecem na faixa, abaixo do agente que os iniciou. Se o comando imprime o próprio progresso (`Rendered 13914/16638`, `84%`), a barra usa esse número. O mod acha sozinho onde ler: a saída do comando, os logs para onde ele manda a saída (`> work/render.log`, `| tee build.log`) e qualquer log que o agente tenha conferido. Lê o arquivo mais recente a cada 2 segundos, então numa sequência (renderiza, depois masteriza) a barra acompanha cada etapa. Sem isso, a linha mostra só o tempo e a última linha impressa. A tarefa sai da lista quando termina.
 
-## Comandos
+## O que cada linha mostra
 
-- `/agentes` abre o painel com a checklist completa de cada agente e a base de cada número. O botão "minimizar" deixa a faixa numa linha só, com um botão "mostrar" pra voltar.
+- **Nome curto** e o **tipo** em uma palavra (busca, plano, agente, comando), mais o tempo rodando.
+- **Barra**, só quando há um número: a checklist do agente ou o progresso que o comando imprime. `≈` marca estimativa pelo histórico. Sem número, não há barra: só o que está sendo feito.
+- **Etapa atual** da checklist, quando existe.
+- **Ação atual** (o arquivo lido, o comando rodado, a última linha do log).
 
 ## Opcional: checklist na conversa principal
 

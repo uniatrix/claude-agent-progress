@@ -304,3 +304,122 @@ export function mapListStatus(status: string): RowStatus | undefined {
       return undefined
   }
 }
+
+/**
+ * A name that reads at a glance: one clause, at most `max` characters, cut at
+ * a separator or a word, never mid-word.
+ */
+export function shortLabel(label: string, max = 32): string {
+  const one = label.replace(/\s+/g, ' ').trim().replace(/[.;:,]+$/, '')
+  if (one.length <= max) return capitalize(one)
+  const head = one.slice(0, max)
+  const cut = Math.max(head.lastIndexOf(', '), head.lastIndexOf('; '), head.lastIndexOf(' (')
+    , head.lastIndexOf(' e '), head.lastIndexOf(' and '), head.lastIndexOf(' - '))
+  const at = cut >= max / 2 ? cut : head.lastIndexOf(' ')
+
+  return `${capitalize((at > 0 ? head.slice(0, at) : head).replace(/[.;:,]+$/, ''))}…`
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+const KINDS: Record<string, string> = {
+  main: 'conversa',
+  shell: 'comando',
+  monitor: 'monitor',
+  workflow: 'workflow',
+  Explore: 'busca',
+  Plan: 'plano',
+  'general-purpose': 'agente',
+  'claude-code-guide': 'docs',
+  teammate: 'colega',
+  fork: 'cópia',
+  '?': 'agente',
+}
+
+/** What kind of worker a row is, in one short word. */
+export function kindLabel(row: AgentRow): string {
+  return KINDS[row.type] ?? row.type.split(':').pop()?.toLowerCase() ?? 'agente'
+}
+
+/** One row as the panel draws it: plain values, nothing left to work out. */
+export type Item = {
+  id: string
+  depth: number
+  name: string
+  kind: string
+  status: RowStatus
+  isTask: boolean
+  /** 0 to 1 when there is a number to show; `null` draws no bar at all. */
+  ratio: number | null
+  isEstimate: boolean
+  elapsed: string
+  /** `etapa 3 de 6: Escrever o mod`, when a checklist says so. */
+  step?: string
+  action?: string
+}
+
+/** Finished rows stay listed this long under "Concluídos". */
+export const DONE_MS = 10 * 60_000
+
+function toItem(row: AgentRow, depth: number, stats: Record<string, TypeStats>, t: number): Item {
+  const p = progressOf(row, stats, t)
+  const done = row.steps.filter(s => s.status === 'completed').length
+  const running = row.steps.find(s => s.status === 'in_progress')
+  const step =
+    row.steps.length > 0 && isLive(row.status)
+      ? `etapa ${Math.min(row.steps.length, done + 1)} de ${row.steps.length}${running ? `: ${shortLabel(running.subject, 36)}` : ''}`
+      : undefined
+
+  return {
+    id: row.id,
+    depth,
+    name: shortLabel(row.label),
+    kind: kindLabel(row),
+    status: row.status,
+    isTask: row.kind === 'task',
+    ratio: p === null ? null : Math.min(1, Math.max(0, p.ratio)),
+    isEstimate: p?.isEstimate ?? false,
+    elapsed: duration((row.endedAt ?? t) - row.startedAt),
+    step,
+    action: isLive(row.status) && row.current ? shortLabel(row.current, 48) : undefined,
+  }
+}
+
+/**
+ * What the panel lists: work going on now, in tree order, and what finished in
+ * the last few minutes, newest first. The main conversation is listed only
+ * with a checklist of its own: otherwise it is the chat itself.
+ */
+export function viewOf(
+  rows: Record<string, AgentRow>,
+  stats: Record<string, TypeStats>,
+  t: number,
+): { live: Item[]; done: Item[] } {
+  const tree = treeOrder(rows)
+  const hasMain = (row: AgentRow) => row.id !== MAIN || row.steps.length > 0
+  const live = tree
+    .filter(({ row }) => isLive(row.status) && hasMain(row))
+    .map(({ row, depth }) => toItem(row, Math.min(depth, 2), stats, t))
+  const done = tree
+    .filter(({ row }) => !isLive(row.status) && hasMain(row) && t - (row.endedAt ?? 0) < DONE_MS)
+    .sort((a, b) => (b.row.endedAt ?? 0) - (a.row.endedAt ?? 0))
+    .slice(0, 6)
+    .map(({ row }) => toItem(row, 0, stats, t))
+
+  return { live, done }
+}
+
+/** `2 agentes · 1 comando`, for the header and the one line in the chat. */
+export function liveSummary(live: readonly Item[]): string {
+  const tasks = live.filter(i => i.isTask).length
+  const agents = live.filter(i => !i.isTask && i.id !== MAIN).length
+  const parts = [
+    agents > 0 ? `${agents} agente${agents > 1 ? 's' : ''}` : '',
+    tasks > 0 ? `${tasks} em background` : '',
+  ].filter(Boolean)
+  if (parts.length > 0) return parts.join(' · ')
+
+  return live.some(i => i.id === MAIN) ? 'conversa com checklist' : 'nada rodando agora'
+}

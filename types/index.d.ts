@@ -39,7 +39,7 @@ declare module 'claude-code' {
     'agent-progress': {
       rows: Record<string, AgentRow>
       now: number
-      isBandHidden: boolean
+      isPaneDismissed: boolean
       stats: Record<string, TypeStats>
     }
   }

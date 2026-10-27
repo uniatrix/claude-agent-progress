@@ -5,6 +5,8 @@ import {
   checklistRatio,
   estimateRatio,
   foldStats,
+  kindLabel,
+  shortLabel,
   lastLine,
   logTargets,
   parseOutputProgress,
@@ -67,71 +69,12 @@ test('text bars mark estimates with a different glyph', () => {
   expect(textBar(0.5, 10, true)).toBe('▒▒▒▒▒░░░░░')
 })
 
-test('the progress tool fills the band on terminal and desktop', async ($, on) => {
-  mock.clock(on)
-  const answered = await $.tool.call({
-    tool: 'mcp__agent-progress__progress',
-    steps: ['Ler o código', 'Escrever o mod', 'Testar'],
-    done: 1,
-    current: 'escrevendo',
-  })
-  // A plugin tool's result must be text: an object fails the call in a live session.
-  expect(typeof answered.result).toBe('string')
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ plugin: 'agent-progress', surface, component: 'AbovePrompt', props: BAND })
-    expect(await ui.find({ text: /Agentes/ })).toBeDefined()
-    expect(await ui.find({ text: /Conversa principal/ })).toBeDefined()
-    expect(await ui.find({ text: /50%/ })).toBeDefined()
-    if (surface === 'desktop') expect(await ui.find({ type: 'Svg' })).toBeDefined()
-    await ui.unmount()
-  }
-})
-
-test('a minimized band keeps one line with the way back', async ($, on) => {
-  mock.clock(on)
-  await $.tool.call({ tool: 'mcp__agent-progress__progress', steps: ['a', 'b'], done: 0 })
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ plugin: 'agent-progress', surface, component: 'AbovePrompt', props: BAND })
-    await ui.press({ key: 'hide' })
-    expect(await ui.find({ key: 'show' })).toBeDefined()
-    expect(await ui.find({ text: /Conversa principal/ })).toBeUndefined()
-    await ui.press({ key: 'show' })
-    expect(await ui.find({ text: /Conversa principal/ })).toBeDefined()
-    await ui.unmount()
-  }
-})
-
 test('progress printed by a program is read from the end of its output', () => {
   expect(parseOutputProgress('Rendered 13912/16638, time remaining: 6m 57s\nRendered 13914/16638')).toBe(13914 / 16638)
   expect(parseOutputProgress('step 1/2 done\n45%')).toBe(0.45)
   expect(parseOutputProgress('page 1/2')).toBeUndefined()
   expect(parseOutputProgress('nothing here')).toBeUndefined()
   expect(lastLine('Encoded 16638/16638\n\u001b[34m○ out/ep1_raw.mp4\u001b[39m 1.2 GB\n')).toBe('○ out/ep1_raw.mp4 1.2 GB')
-})
-
-test('a background shell shows in the band with the progress its log reports', async ($, on) => {
-  mock.clock(on)
-  on('classic.Stop', () => ({}))
-  on('tool.call', { tool: 'Bash' }, (_, e) =>
-    e.run_in_background
-      ? {
-          result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' },
-          text: 'Command running in background with ID: b1. Output is being written to: C:\tmp\b1.output. You will be notified when it completes.',
-        }
-      : { result: { stdout: 'Rendered 50/100', stderr: '', interrupted: false }, text: 'Rendered 50/100' },
-  )
-  await $.tool.call({ tool: 'Bash', command: 'render.sh', description: 'Renderizar o vídeo', run_in_background: true })
-  await $.tool.call({ tool: 'Bash', command: 'tail -1 render.log' })
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ plugin: 'agent-progress', surface, component: 'AbovePrompt', props: BAND })
-    expect(await ui.find({ text: /Renderizar o vídeo/ })).toBeDefined()
-    expect(await ui.find({ text: /50%/ })).toBeDefined()
-    await ui.unmount()
-  }
-  await $.classic.Stop({ stop_hook_active: false, background_tasks: [] })
-  const ui = await $.ui.mount({ plugin: 'agent-progress', surface: 'terminal', component: 'AbovePrompt', props: BAND })
-  expect(await ui.find({ text: /100%/ })).toBeDefined()
-  await ui.unmount()
 })
 
 const RENDER =
@@ -150,13 +93,99 @@ test('a command tells where its logs go, and a check tells which log it reads', 
   expect(polledLogs('ls -la work', 'C:/p')).toEqual([])
 })
 
-test('the band follows the log a background command writes, without the agent checking', async ($, on) => {
+const PANE = {
+  title: 'Agentes',
+  isFocused: false,
+  bodyColumns: 48,
+  placement: 'dock' as const,
+  scroll: { offset: 0, bodyRows: 30 },
+  view: {},
+}
+
+function shellAnswer(withProgress: boolean) {
+  return (_: unknown, e: { run_in_background?: boolean }) =>
+    e.run_in_background
+      ? {
+          result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' },
+          text: 'Command running in background with ID: b1. Output is being written to: C:\\tmp\\b1.output.',
+        }
+      : {
+          result: { stdout: withProgress ? 'Rendered 50/100' : 'ok', stderr: '', interrupted: false },
+          text: withProgress ? 'Rendered 50/100' : 'ok',
+        }
+}
+
+test('names are short and kinds read in a word', () => {
+  expect(shortLabel('Render, master, contact sheet and phone copy of episode 1')).toBe('Render, master, contact sheet…')
+  expect(shortLabel('mapa do emulador no KB')).toBe('Mapa do emulador no KB')
+  expect(kindLabel(agent({ type: 'Explore' }))).toBe('busca')
+  expect(kindLabel(agent({ type: 'shell' }))).toBe('comando')
+  expect(kindLabel(agent({ type: 'my-plugin:reviewer' }))).toBe('reviewer')
+})
+
+test('the panel shows a checklist as a bar and the step in words', async ($, on) => {
+  mock.clock(on)
+  const answered = await $.tool.call({
+    tool: 'mcp__agent-progress__progress',
+    steps: ['Ler o código', 'Escrever o mod', 'Testar'],
+    done: 1,
+  })
+  // A plugin tool's result must be text: an object fails the call in a live session.
+  expect(typeof answered.result).toBe('string')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-progress', surface, component: 'Pane', requestId: 'agentes', props: PANE })
+    expect(await ui.find({ text: /Conversa principal/ })).toBeDefined()
+    expect(await ui.find({ text: /50%/ })).toBeDefined()
+    expect(await ui.find({ text: /etapa 2 de 3: Escrever o mod/ })).toBeDefined()
+    if (surface === 'desktop') expect(await ui.find({ type: 'Svg' })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('work with no number to show draws no bar, only what it is doing', async ($, on) => {
+  mock.clock(on)
+  on('tool.call', { tool: 'Bash' }, shellAnswer(false))
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', description: 'Servidor de desenvolvimento', run_in_background: true })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-progress', surface, component: 'Pane', requestId: 'agentes', props: PANE })
+    expect(await ui.find({ text: /Servidor de desenvolvimento/ })).toBeDefined()
+    expect(await ui.find({ text: /comando/ })).toBeDefined()
+    expect(await ui.find({ text: /%/ })).toBeUndefined()
+    if (surface === 'desktop') expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+test('the chat keeps one line with the way to the panel', async ($, on) => {
+  mock.clock(on)
+  on('tool.call', { tool: 'Bash' }, shellAnswer(true))
+  await $.tool.call({ tool: 'Bash', command: 'render.sh', description: 'Renderizar o vídeo', run_in_background: true })
+  await $.tool.call({ tool: 'Bash', command: 'tail -1 render.log' })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-progress', surface, component: 'AbovePrompt', props: BAND })
+    expect(await ui.find({ text: /1 em background/ })).toBeDefined()
+    expect(await ui.find({ text: /Renderizar o vídeo 50%/ })).toBeDefined()
+    expect(await ui.find({ key: 'open' })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('a background task finishes when the session no longer lists it', async ($, on) => {
+  mock.clock(on)
+  on('classic.Stop', () => ({}))
+  on('tool.call', { tool: 'Bash' }, shellAnswer(true))
+  await $.tool.call({ tool: 'Bash', command: 'render.sh', description: 'Renderizar o vídeo', run_in_background: true })
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [] })
+  const ui = await $.ui.mount({ plugin: 'agent-progress', surface: 'terminal', component: 'Pane', requestId: 'agentes', props: PANE })
+  expect(await ui.find({ text: /Concluídos/ })).toBeDefined()
+  expect(await ui.find({ text: /✓ Renderizar o vídeo/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the panel follows the log a background command writes, without the agent checking', async ($, on) => {
   const clock = mock.clock(on)
   on('session.cwd', () => ({ value: 'C:/p' }))
-  on('tool.call', { tool: 'Bash' }, () => ({
-    result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'r1' },
-    text: 'Command running in background with ID: r1. Output is being written to: C:\tmp\r1.output.',
-  }))
+  on('tool.call', { tool: 'Bash' }, shellAnswer(false))
   on('fs.stat', (_, e) =>
     e.path.endsWith('render_v3.log')
       ? { value: { kind: 'file', size: 900, mtimeMs: 2, isLink: false } }
@@ -165,7 +194,7 @@ test('the band follows the log a background command writes, without the agent ch
   on('fs.read', () => ({ value: 'Rendered 100/400\rRendered 300/400, time remaining: 1m' }))
   await $.tool.call({ tool: 'Bash', command: RENDER, description: 'Render', run_in_background: true })
   await clock.advance(5000)
-  const ui = await $.ui.mount({ plugin: 'agent-progress', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  const ui = await $.ui.mount({ plugin: 'agent-progress', surface: 'terminal', component: 'Pane', requestId: 'agentes', props: PANE })
   expect(await ui.find({ text: /75%/ })).toBeDefined()
   expect(await ui.find({ text: /time remaining/ })).toBeDefined()
   await ui.unmount()
