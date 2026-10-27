@@ -669,7 +669,7 @@ export const register: Register = on => {
     const room = Math.max(1, e.props.maxRows - 2)
     const shown = view.live.slice(0, room)
     const more = view.live.length - shown.length
-    const nameWidth = Math.max(12, Math.min(28, Math.floor(e.props.bodyColumns / 3)))
+    const nameWidth = Math.max(16, Math.min(26, Math.floor(e.props.bodyColumns / 4)))
 
     if (e.surface === 'terminal') {
       const { Box, Text, Button } = $.ui.resolve(e)
@@ -692,7 +692,9 @@ export const register: Register = on => {
             shown.map(i => (
               <Text key={i.id} wrap="truncate-end">
                 {'  '.repeat(i.depth)}
-                <Text color={THEME[i.status]}>{ICON[i.status]}</Text> {i.name.padEnd(nameWidth).slice(0, nameWidth)}{' '}
+                <Text color={THEME[i.status]}>{ICON[i.status]}</Text>{' '}
+                {/* The indent counts inside the name's width: the next columns line up. */}
+                {i.name.slice(0, nameWidth - i.depth * 2).padEnd(nameWidth - i.depth * 2)}{' '}
                 <Text dimColor>{i.kind.padEnd(8)}</Text>
                 {i.ratio === null ? ' '.repeat(barWidth + 6) : (
                   <Text>
@@ -726,27 +728,33 @@ export const register: Register = on => {
         </Box>
         {isOpen &&
           shown.map(i => (
-            <Box key={i.id} flexDirection="row" gap={1} alignItems="center" marginLeft={1 + i.depth * 2}>
-              <Text color={THEME[i.status]}>{ICON[i.status]}</Text>
-              <Box width={nameWidth}>
+            // Fixed columns that never shrink, the indent inside the name's: every bar starts at one place.
+            <Box key={i.id} flexDirection="row" gap={2} alignItems="center">
+              <Box width={nameWidth} flexShrink={0} paddingLeft={1 + i.depth * 2} flexDirection="row" gap={1}>
+                <Text color={THEME[i.status]}>{ICON[i.status]}</Text>
                 <Text bold wrap="truncate-end">
                   {i.name}
                 </Text>
               </Box>
-              <Box width={8}>
+              <Box width={8} flexShrink={0}>
                 <Text dimColor>{i.kind}</Text>
               </Box>
-              {i.ratio !== null && (
-                <Svg
-                  source={svgBar({ ratio: i.ratio, isEstimate: i.isEstimate }, i.status)}
-                  alt={pct(i)}
-                  width={110}
-                  height={8}
-                />
-              )}
-              {i.ratio !== null && <Text>{pct(i)}</Text>}
-              <Text dimColor>{i.elapsed}</Text>
-              {/* The step takes what is left of the line, up to the edge. */}
+              <Box width={14} flexShrink={0} flexDirection="row" alignItems="center">
+                {i.ratio !== null && (
+                  <Svg
+                    source={svgBar({ ratio: i.ratio, isEstimate: i.isEstimate }, i.status)}
+                    alt={pct(i)}
+                    width={110}
+                    height={8}
+                  />
+                )}
+              </Box>
+              <Box width={5} flexShrink={0} justifyContent="flex-end">
+                <Text>{i.ratio === null ? '' : pct(i)}</Text>
+              </Box>
+              <Box width={6} flexShrink={0} justifyContent="flex-end">
+                <Text dimColor>{i.elapsed}</Text>
+              </Box>
               <Box flexGrow={1} flexShrink={1}>
                 <Text dimColor wrap="truncate-end">
                   {i.step ?? i.action ?? ''}
